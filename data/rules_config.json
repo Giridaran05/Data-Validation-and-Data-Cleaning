@@ -1,0 +1,176 @@
+{
+  "dataset_name": "ecommerce_orders",
+  "description": "Retail transaction records for DIT Internship 2026 Data Cleaning & Validation Engine",
+  "required_columns": [
+    "order_id",
+    "customer_id",
+    "customer_email",
+    "order_date",
+    "product_sku",
+    "category",
+    "quantity",
+    "unit_price",
+    "discount_pct",
+    "tax_amount",
+    "total_amount",
+    "payment_status",
+    "shipping_country",
+    "postal_code"
+  ],
+  "deduplication": {
+    "key_fields": ["order_id"],
+    "strategy": "keep_first"
+  },
+  "fields": [
+    {
+      "name": "order_id",
+      "field_type": "string",
+      "required": true,
+      "nullable": false,
+      "regex": "^ORD-\\d{4}-\\d{5}$",
+      "strip_whitespace": true,
+      "description": "Unique order identifier format ORD-YYYY-XXXXX"
+    },
+    {
+      "name": "customer_id",
+      "field_type": "string",
+      "required": true,
+      "nullable": false,
+      "regex": "^CUST-\\d{4,6}$",
+      "strip_whitespace": true,
+      "description": "Customer identifier format CUST-XXXX"
+    },
+    {
+      "name": "customer_email",
+      "field_type": "email",
+      "required": true,
+      "nullable": false,
+      "strip_whitespace": true,
+      "to_lowercase": true,
+      "description": "Primary customer contact email, normalized to lowercase"
+    },
+    {
+      "name": "order_date",
+      "field_type": "date",
+      "required": true,
+      "nullable": false,
+      "date_format": "%Y-%m-%d",
+      "description": "Transaction date in ISO 8601 YYYY-MM-DD format (must not be in future)"
+    },
+    {
+      "name": "product_sku",
+      "field_type": "string",
+      "required": true,
+      "nullable": false,
+      "regex": "^[A-Z]{3}-\\d{4}$",
+      "strip_whitespace": true,
+      "to_uppercase": true,
+      "description": "Stock keeping unit format CAT-XXXX where CAT is 3 letters"
+    },
+    {
+      "name": "category",
+      "field_type": "string",
+      "required": true,
+      "nullable": false,
+      "allowed_values": [
+        "Electronics",
+        "Apparel",
+        "Home & Kitchen",
+        "Health & Beauty",
+        "Books",
+        "Office Supplies"
+      ],
+      "strip_whitespace": true,
+      "description": "Product category classification enum"
+    },
+    {
+      "name": "quantity",
+      "field_type": "integer",
+      "required": true,
+      "nullable": false,
+      "min_value": 1,
+      "max_value": 500,
+      "description": "Units purchased (positive whole number between 1 and 500)"
+    },
+    {
+      "name": "unit_price",
+      "field_type": "float",
+      "required": true,
+      "nullable": false,
+      "min_value": 0.01,
+      "max_value": 10000.0,
+      "description": "Base price per unit in USD before discount (must be > 0.00)"
+    },
+    {
+      "name": "discount_pct",
+      "field_type": "float",
+      "required": true,
+      "nullable": false,
+      "min_value": 0.0,
+      "max_value": 0.70,
+      "description": "Promotional discount percentage (0.00 to 0.70 max permitted)"
+    },
+    {
+      "name": "tax_amount",
+      "field_type": "float",
+      "required": true,
+      "nullable": false,
+      "min_value": 0.0,
+      "description": "State and local sales tax amount in USD"
+    },
+    {
+      "name": "total_amount",
+      "field_type": "float",
+      "required": true,
+      "nullable": false,
+      "min_value": 0.01,
+      "description": "Final customer billing total after discount and tax"
+    },
+    {
+      "name": "payment_status",
+      "field_type": "string",
+      "required": true,
+      "nullable": false,
+      "allowed_values": ["PAID", "PENDING", "REFUNDED", "FAILED"],
+      "to_uppercase": true,
+      "description": "Payment authorization state"
+    },
+    {
+      "name": "shipping_country",
+      "field_type": "string",
+      "required": true,
+      "nullable": false,
+      "regex": "^[A-Z]{2}$",
+      "to_uppercase": true,
+      "description": "ISO-3166-1 alpha-2 destination country code"
+    },
+    {
+      "name": "postal_code",
+      "field_type": "string",
+      "required": true,
+      "nullable": false,
+      "strip_whitespace": true,
+      "description": "Postal or ZIP code"
+    }
+  ],
+  "business_rules": [
+    {
+      "rule_id": "BR_01_CALCULATION_INTEGRITY",
+      "description": "Total amount must equal: (quantity * unit_price * (1 - discount_pct)) + tax_amount (within 5 cent tolerance)",
+      "rule_type": "cross_field_math",
+      "fields": ["quantity", "unit_price", "discount_pct", "tax_amount", "total_amount"],
+      "expression": "abs(total_amount - (round(quantity * unit_price * (1 - discount_pct), 2) + tax_amount)) <= 0.05",
+      "error_message": "Reported total_amount does not match line item mathematics",
+      "severity": "ERROR"
+    },
+    {
+      "rule_id": "BR_02_PAID_STATUS_TOTAL_POSITIVE",
+      "description": "Orders with payment status 'PAID' must have a total_amount strictly greater than 0.00",
+      "rule_type": "payment_status_integrity",
+      "fields": ["payment_status", "total_amount"],
+      "expression": "payment_status == 'PAID' implies total_amount > 0.00",
+      "error_message": "PAID order cannot have total_amount of $0.00",
+      "severity": "ERROR"
+    }
+  ]
+}

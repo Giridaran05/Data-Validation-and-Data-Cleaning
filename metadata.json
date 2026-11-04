@@ -1,0 +1,6 @@
+{
+  "name": "DIT Data Cleaning & Validation Engine",
+  "description": "Enterprise Python data validation and cleaning engine with automated schema checking, anomaly detection, exception quarantine register, and interactive developer workbench.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,31 @@
+{
+  "total_records": 100,
+  "valid_records": 79,
+  "quarantined_records": 21,
+  "corrected_records": 0,
+  "duplicate_records": 1,
+  "pass_rate_pct": 79.0,
+  "quarantine_rate_pct": 21.0,
+  "execution_time_ms": 15.6,
+  "violation_counts_by_type": {
+    "TYPE_CAST_FAILURE": 13,
+    "MISSING_MANDATORY_VALUE": 2,
+    "OUT_OF_BOUNDS_RANGE": 3,
+    "REGEX_FORMAT_MISMATCH": 1,
+    "INVALID_ENUM_VALUE": 1,
+    "CONSTRAINT_VIOLATION": 1,
+    "DUPLICATE_PRIMARY_KEY": 1
+  },
+  "violation_counts_by_field": {
+    "customer_email": 12,
+    "customer_id": 1,
+    "order_date": 2,
+    "quantity": 1,
+    "unit_price": 1,
+    "discount_pct": 1,
+    "product_sku": 1,
+    "category": 1,
+    "total_amount": 1,
+    "order_id": 1
+  }
+}
