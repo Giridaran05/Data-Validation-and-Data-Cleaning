@@ -1,0 +1,9 @@
+product_id,product_name,category,price,stock_quantity,supplier
+PRD-101,Wireless Ergonomic Mouse,Electronics,$29.99,150,LogiTech Supply
+PRD-102,USB-C Fast Charging Cable,Electronics,12.50,500,Anker Direct
+PRD-103,Organic Cotton T-Shirt,Apparel,$ 19.99,80,EcoWear Global
+PRD-104,Stainless Steel Water Bottle,Home & Kitchen,$24.00,-15,HydroFlask Inc
+PRD-105,Bluetooth Noise-Cancelling Headphones,Electronics,-89.99,45,Sony Sound
+PRD-106,,Office Supplies,$4.50,200,Stationery Hub
+PRD-102,USB-C Fast Charging Cable,Electronics,12.50,500,Anker Direct
+PRD-107,Ceramic Coffee Mug,Home & Kitchen,$15.00,0,KitchenCraft

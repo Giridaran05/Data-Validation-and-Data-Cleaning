@@ -1,0 +1,9 @@
+reg_no,student_name,email,department,year,phone_number,cgpa
+00101,  arun kumar  ,arun@university.edu,Computer Science,3,+91-9876543210,8.75
+00102,priya r,priya.r@@university,Electronics,2,9876543211,9.10
+00103,MOHAMMED FAIZAL,faizal@college.edu,Mechanical,4,9876543212,7.80
+00104,SNEHA SHARMA,sneha@university.edu,Computer Science,1,9876543213,8.90
+00101,arun kumar,arun@university.edu,Computer Science,3,9876543210,8.75
+00105,Karthik M,karthik@college.edu,Civil,2,98765,6.50
+,Deepa S,deepa@university.edu,Information Technology,3,9876543215,8.20
+00107,Vikram Patel,vikram.p@college.edu,Electrical,4,9876543216,-1.50

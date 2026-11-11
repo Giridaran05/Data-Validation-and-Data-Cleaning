@@ -1,0 +1,7 @@
+patient_id,patient_name,age,blood_group,admission_date,doctor_assigned,room_no
+PAT-501,Johnathan Doe,45,O+,2026-02-10,Dr. Robert Smith,302-A
+PAT-502,Emma Watson,28,A-,02/14/2026,Dr. Sarah Connor,105-B
+PAT-503,Michael Brown,-5,B+,2026-02-12,Dr. Alan Grant,201-C
+PAT-504,Sarah Jenkins,62,AB+,2026-02-15,Dr. Lisa Cuddy,401-A
+PAT-501,Johnathan Doe,45,O+,2026-02-10,Dr. Robert Smith,302-A
+,David Miller,51,O-,2026-02-16,Dr. Gregory House,502-B

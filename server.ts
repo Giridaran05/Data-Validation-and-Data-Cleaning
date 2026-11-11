@@ -177,7 +177,173 @@ async function startServer() {
     });
   });
 
-  // Custom Ingestion & Validation Playground
+  // Get Available Sample Datasets
+  app.get('/api/sample-datasets', (req, res) => {
+    const samples = [
+      {
+        id: 'orders',
+        name: 'Enterprise Orders Dataset',
+        domain: 'Order / E-Commerce Data',
+        filename: 'orders_raw.csv',
+        description: '100 rows with 15 injected test anomalies (math fraud, missing emails, invalid SKUs)',
+        recordCount: 100,
+        path: path.join(__dirname, 'data', 'orders_raw.csv'),
+      },
+      {
+        id: 'students',
+        name: 'College / University Student Data',
+        domain: 'College / Student Data',
+        filename: 'sample_students.csv',
+        description: '8 student records with leading zeros (00101), whitespace names, invalid emails & phones',
+        recordCount: 8,
+        path: path.join(__dirname, 'data', 'sample_students.csv'),
+      },
+      {
+        id: 'products',
+        name: 'Product & Inventory Data',
+        domain: 'Product Inventory Data',
+        filename: 'sample_products.csv',
+        description: '8 product rows with currency symbols ($), negative stock (-15), and negative prices',
+        recordCount: 8,
+        path: path.join(__dirname, 'data', 'sample_products.csv'),
+      },
+      {
+        id: 'employees',
+        name: 'Employee / HR Management Data',
+        domain: 'Employee / HR Data',
+        filename: 'sample_employees.csv',
+        description: '7 employee records with mixed date formats, salary currencies, and unformatted names',
+        recordCount: 7,
+        path: path.join(__dirname, 'data', 'sample_employees.csv'),
+      },
+      {
+        id: 'healthcare',
+        name: 'Hospital / Patient Healthcare Data',
+        domain: 'Hospital / Healthcare Data',
+        filename: 'sample_healthcare.csv',
+        description: '6 patient admission records with blood groups, negative ages, and missing IDs',
+        recordCount: 6,
+        path: path.join(__dirname, 'data', 'sample_healthcare.csv'),
+      },
+    ];
+
+    res.json(samples);
+  });
+
+  // Load a Specific Sample Dataset Content
+  app.get('/api/sample-datasets/:id', (req, res) => {
+    const id = req.params.id;
+    const fileMap: Record<string, string> = {
+      orders: path.join(__dirname, 'data', 'orders_raw.csv'),
+      students: path.join(__dirname, 'data', 'sample_students.csv'),
+      products: path.join(__dirname, 'data', 'sample_products.csv'),
+      employees: path.join(__dirname, 'data', 'sample_employees.csv'),
+      healthcare: path.join(__dirname, 'data', 'sample_healthcare.csv'),
+    };
+
+    const filePath = fileMap[id] || fileMap.orders;
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const records = parseCSV(filePath);
+      return res.json({ id, content, records, count: records.length });
+    }
+    res.status(404).json({ error: 'Sample dataset not found' });
+  });
+
+  // Intelligent CSV Dataset Profiling & Recommendations Endpoint
+  app.post('/api/profile-dataset', (req, res) => {
+    const { csvContent } = req.body;
+    if (!csvContent || typeof csvContent !== 'string') {
+      return res.status(400).json({ error: 'csvContent string is required' });
+    }
+
+    const tempDir = path.join(__dirname, 'data', 'temp');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+    const tempInput = path.join(tempDir, `profile_input_${Date.now()}.csv`);
+
+    try {
+      fs.writeFileSync(tempInput, csvContent.trim(), 'utf-8');
+      const cmd = `python3 python_engine/universal_cli.py --input "${tempInput}" --action profile`;
+
+      exec(cmd, { cwd: __dirname }, (error, stdout, stderr) => {
+        if (fs.existsSync(tempInput)) try { fs.unlinkSync(tempInput); } catch (_) {}
+
+        if (error) {
+          return res.status(500).json({ error: error.message, stderr });
+        }
+
+        try {
+          const parsed = JSON.parse(stdout.trim());
+          res.json(parsed);
+        } catch (parseErr: any) {
+          res.status(500).json({ error: 'Failed to parse profiler output', stdout, stderr });
+        }
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Universal Ingestion, Dynamic Cleaning & Validation Execution Endpoint
+  app.post('/api/universal-clean', (req, res) => {
+    const { csvContent, enabledRules } = req.body;
+    if (!csvContent || typeof csvContent !== 'string') {
+      return res.status(400).json({ error: 'csvContent string is required' });
+    }
+
+    const tempDir = path.join(__dirname, 'data', 'temp');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+    const timeId = Date.now();
+    const tempInput = path.join(tempDir, `univ_input_${timeId}.csv`);
+    const tempClean = path.join(tempDir, `univ_clean_${timeId}.csv`);
+    const tempExceptions = path.join(tempDir, `univ_exc_${timeId}.csv`);
+    const tempSummary = path.join(tempDir, `univ_summary_${timeId}.json`);
+    const tempRules = path.join(tempDir, `univ_rules_${timeId}.json`);
+
+    try {
+      fs.writeFileSync(tempInput, csvContent.trim(), 'utf-8');
+      if (enabledRules) {
+        fs.writeFileSync(tempRules, JSON.stringify(enabledRules), 'utf-8');
+      }
+
+      const rulesArg = enabledRules ? `--rules "${tempRules}"` : '';
+      const cmd = `python3 python_engine/universal_cli.py --input "${tempInput}" --action process ${rulesArg} --output-clean "${tempClean}" --output-exceptions "${tempExceptions}" --summary-json "${tempSummary}"`;
+
+      exec(cmd, { cwd: __dirname }, (error, stdout, stderr) => {
+        let summaryData = null;
+        if (fs.existsSync(tempSummary)) {
+          try {
+            summaryData = JSON.parse(fs.readFileSync(tempSummary, 'utf-8'));
+          } catch (_) {}
+        }
+
+        const cleanedRecords = parseCSV(tempClean);
+        const exceptionRecords = parseCSV(tempExceptions);
+
+        // Clean up temp files
+        [tempInput, tempClean, tempExceptions, tempSummary, tempRules].forEach(f => {
+          if (fs.existsSync(f)) try { fs.unlinkSync(f); } catch (_) {}
+        });
+
+        res.json({
+          success: !error,
+          stdout,
+          stderr,
+          summary: summaryData?.summary || null,
+          profile: summaryData?.profile || null,
+          cleanedRecords,
+          exceptionRecords,
+          error: error ? error.message : null,
+        });
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Custom Ingestion & Validation Playground (Maintained for legacy compatibility)
   app.post('/api/validate-custom', (req, res) => {
     const { csvContent } = req.body;
     if (!csvContent || typeof csvContent !== 'string') {
@@ -191,17 +357,16 @@ async function startServer() {
     const tempClean = path.join(tempDir, `custom_clean_${Date.now()}.csv`);
     const tempExceptions = path.join(tempDir, `custom_exc_${Date.now()}.csv`);
     const tempSummary = path.join(tempDir, `custom_summary_${Date.now()}.json`);
-    const rulesPath = path.join(__dirname, 'data', 'rules_config.json');
 
     try {
       fs.writeFileSync(tempInput, csvContent.trim(), 'utf-8');
-      const cmd = `python3 python_engine/cli.py --input "${tempInput}" --rules "${rulesPath}" --output-clean "${tempClean}" --output-exceptions "${tempExceptions}" --summary-json "${tempSummary}" -v`;
+      const cmd = `python3 python_engine/universal_cli.py --input "${tempInput}" --action process --output-clean "${tempClean}" --output-exceptions "${tempExceptions}" --summary-json "${tempSummary}"`;
 
       exec(cmd, { cwd: __dirname }, (error, stdout, stderr) => {
-        let summary = null;
+        let summaryData = null;
         if (fs.existsSync(tempSummary)) {
           try {
-            summary = JSON.parse(fs.readFileSync(tempSummary, 'utf-8'));
+            summaryData = JSON.parse(fs.readFileSync(tempSummary, 'utf-8'));
           } catch (_) {}
         }
         const cleanedRecords = parseCSV(tempClean);
@@ -216,7 +381,8 @@ async function startServer() {
           success: !error,
           stdout,
           stderr,
-          summary,
+          summary: summaryData?.summary || null,
+          profile: summaryData?.profile || null,
           cleanedRecords,
           exceptionRecords,
           error: error ? error.message : null,
