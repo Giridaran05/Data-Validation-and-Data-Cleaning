@@ -39,6 +39,13 @@ import {
   Info,
   CheckCircle
 } from 'lucide-react';
+import { SAMPLE_PRESETS, SAMPLE_CSV_MAP } from './data/sampleDatasets';
+import {
+  parseCSVContent,
+  profileDatasetClient,
+  cleanDatasetClient,
+  runMandatoryTestsClient,
+} from './utils/clientEngine';
 
 interface DatasetProfile {
   total_rows: number;
@@ -136,8 +143,8 @@ export default function App() {
   // Input State
   const [inputMode, setInputMode] = useState<'sample' | 'upload' | 'paste'>('sample');
   const [selectedSampleId, setSelectedSampleId] = useState<string>('orders');
-  const [samplePresets, setSamplePresets] = useState<SamplePreset[]>([]);
-  const [fileName, setFileName] = useState<string>('orders_raw.csv (Enterprise Orders)');
+  const [samplePresets, setSamplePresets] = useState<SamplePreset[]>(SAMPLE_PRESETS);
+  const [fileName, setFileName] = useState<string>('orders_raw.csv');
   const [csvContent, setCsvContent] = useState<string>('');
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -192,39 +199,61 @@ export default function App() {
   // Active Navigation Anchor
   const [activeNav, setActiveNav] = useState<string>('dashboard');
 
+  // Helper: fetch JSON safely, returning null if backend is unavailable or returns HTML (e.g., static Netlify host)
+  const fetchJsonSafe = async <T = any>(url: string, init?: RequestInit): Promise<T | null> => {
+    try {
+      const res = await fetch(url, init);
+      if (!res.ok) return null;
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.toLowerCase().includes('application/json')) return null;
+      return (await res.json()) as T;
+    } catch {
+      return null;
+    }
+  };
+
   // Load sample presets on mount
   useEffect(() => {
     loadPresets();
   }, []);
 
   const loadPresets = async () => {
-    try {
-      const res = await fetch('/api/sample-datasets');
-      if (res.ok) {
-        const presets: SamplePreset[] = await res.json();
-        setSamplePresets(presets);
-        loadSamplePreset('orders');
-      }
-    } catch (e) {
-      console.error(e);
+    const presets = await fetchJsonSafe<SamplePreset[]>('/api/sample-datasets');
+    if (Array.isArray(presets) && presets.length > 0) {
+      setSamplePresets(presets);
+    } else {
+      setSamplePresets(SAMPLE_PRESETS);
     }
+    await loadSamplePreset('orders');
   };
 
   const loadSamplePreset = async (presetId: string) => {
     setSelectedSampleId(presetId);
     setInputMode('sample');
-    try {
-      const res = await fetch(`/api/sample-datasets/${presetId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setFileName(`${presetId}_sample.csv`);
-        setCsvContent(data.content);
-        setRawRecords(data.records || []);
-        analyzeDataset(data.content);
-      }
-    } catch (e) {
-      console.error(e);
+    setSummary(null);
+    setCleanRecords([]);
+    setExceptions([]);
+
+    const apiData = await fetchJsonSafe<{ content: string; records?: Record<string, string>[] }>(
+      `/api/sample-datasets/${presetId}`
+    );
+
+    if (apiData && apiData.content) {
+      const presetMeta = SAMPLE_PRESETS.find((p) => p.id === presetId);
+      setFileName(presetMeta?.filename || `${presetId}_sample.csv`);
+      setCsvContent(apiData.content);
+      setRawRecords(apiData.records || parseCSVContent(apiData.content).records);
+      await analyzeDataset(apiData.content);
+      return;
     }
+
+    // Client-side static fallback (for Netlify / static builds)
+    const fallbackContent = SAMPLE_CSV_MAP[presetId] || SAMPLE_CSV_MAP.orders;
+    const presetMeta = SAMPLE_PRESETS.find((p) => p.id === presetId) || SAMPLE_PRESETS[0];
+    setFileName(presetMeta.filename);
+    setCsvContent(fallbackContent);
+    setRawRecords(parseCSVContent(fallbackContent).records);
+    await analyzeDataset(fallbackContent);
   };
 
   // Automatic Intelligent Profiler
@@ -232,22 +261,28 @@ export default function App() {
     if (!content.trim()) return;
     setIsProfiling(true);
     try {
-      const res = await fetch('/api/profile-dataset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ csvContent: content }),
+      const apiData = await fetchJsonSafe<{ profile: DatasetProfile; recommendations: CleaningRecommendation[] }>(
+        '/api/profile-dataset',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ csvContent: content }),
+        }
+      );
+
+      const resolved =
+        apiData && apiData.profile
+          ? apiData
+          : profileDatasetClient(content);
+
+      setProfile(resolved.profile);
+      setRecommendations(resolved.recommendations || []);
+      const ruleMap: Record<string, boolean> = {};
+      (resolved.recommendations || []).forEach((r: CleaningRecommendation) => {
+        ruleMap[r.id] = r.enabled;
       });
-      if (res.ok) {
-        const data = await res.json();
-        setProfile(data.profile);
-        setRecommendations(data.recommendations || []);
-        const ruleMap: Record<string, boolean> = {};
-        (data.recommendations || []).forEach((r: CleaningRecommendation) => {
-          ruleMap[r.id] = r.enabled;
-        });
-        setEnabledRuleMap(ruleMap);
-        setWorkflowStep(2);
-      }
+      setEnabledRuleMap(ruleMap);
+      setWorkflowStep(2);
     } catch (e) {
       console.error('Profiling error:', e);
     } finally {
@@ -265,10 +300,14 @@ export default function App() {
   const processUploadedFile = (file: File) => {
     setFileName(file.name);
     setInputMode('upload');
+    setSummary(null);
+    setCleanRecords([]);
+    setExceptions([]);
     const reader = new FileReader();
     reader.onload = (event) => {
-      const text = event.target?.result as string;
+      const text = (event.target?.result as string) || '';
       setCsvContent(text);
+      setRawRecords(parseCSVContent(text).records);
       analyzeDataset(text);
     };
     reader.readAsText(file);
@@ -290,14 +329,18 @@ export default function App() {
   const handleExecutePipeline = async () => {
     const contentToSend = csvContent.trim();
     if (!contentToSend) {
-      alert('Please upload or select a CSV dataset first.');
       return;
     }
 
     setIsValidating(true);
     const startTime = performance.now();
     try {
-      const res = await fetch('/api/universal-clean', {
+      const apiData = await fetchJsonSafe<{
+        summary: EngineSummary;
+        profile: DatasetProfile;
+        cleanedRecords: Record<string, string>[];
+        exceptionRecords: ExceptionItem[];
+      }>('/api/universal-clean', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -306,7 +349,11 @@ export default function App() {
         }),
       });
 
-      const data = await res.json();
+      const usedBackend = Boolean(apiData && apiData.summary);
+      const data = usedBackend
+        ? apiData!
+        : cleanDatasetClient(contentToSend, enabledRuleMap);
+
       if (data.summary) setSummary(data.summary);
       if (data.profile) setProfile(data.profile);
       setCleanRecords(data.cleanedRecords || []);
@@ -319,26 +366,14 @@ export default function App() {
         `[DATASET PROFILE] ${data.profile?.total_rows || 0} rows, ${data.profile?.total_columns || 0} columns analyzed\n` +
         `[PARTITIONING] ${data.cleanedRecords?.length || 0} Clean Warehouse Records (Pass Rate: ${data.summary?.pass_rate_pct}%)\n` +
         `[EXCEPTIONS] ${data.exceptionRecords?.length || 0} Quarantined Records logged to Exception Register\n` +
-        `[TELEMETRY] Native Python 3.10 Standard Library`
+        `[TELEMETRY] ${usedBackend ? 'Native Python 3.10 Standard Library' : 'Browser TypeScript Engine (Static Mode)'}`
       );
 
-      // Parse raw records for display
-      const lines = contentToSend.split('\n');
-      if (lines.length > 1) {
-        const headers = lines[0].split(',').map(h => h.trim());
-        const rows = lines.slice(1).filter(l => l.trim()).map(line => {
-          const cols = line.split(',');
-          const obj: Record<string, string> = {};
-          headers.forEach((h, idx) => { obj[h] = cols[idx]?.trim() || ''; });
-          return obj;
-        });
-        setRawRecords(rows);
-      }
-
+      setRawRecords(parseCSVContent(contentToSend).records);
       setWorkflowStep(4);
       setOutputView('clean');
     } catch (e: any) {
-      alert(`Validation error: ${e.message}`);
+      console.error('Validation error:', e);
     } finally {
       setIsValidating(false);
     }
@@ -348,12 +383,20 @@ export default function App() {
   const handleRunTests = async () => {
     setIsRunningTests(true);
     try {
-      const res = await fetch('/api/run-tests', { method: 'POST' });
-      const data = await res.json();
+      const apiData = await fetchJsonSafe<{
+        output?: string;
+        testCases?: Array<{ name: string; status: string }>;
+      }>('/api/run-tests', { method: 'POST' });
+
+      const data =
+        apiData && Array.isArray(apiData.testCases) && apiData.testCases.length > 0
+          ? apiData
+          : runMandatoryTestsClient();
+
       setTestOutput(data.output || '');
       if (data.testCases && data.testCases.length > 0) {
         const map: Record<string, 'ok' | 'fail'> = {};
-        data.testCases.forEach((t: any) => {
+        data.testCases.forEach((t) => {
           map[t.name] = t.status === 'ok' ? 'ok' : 'fail';
         });
         setTestResultsMap(map);
@@ -368,7 +411,6 @@ export default function App() {
   // Export CSV Helper
   const downloadCSV = (content: any[], filename: string) => {
     if (!content || content.length === 0) {
-      alert('No records available to export.');
       return;
     }
     const headers = Object.keys(content[0]);
