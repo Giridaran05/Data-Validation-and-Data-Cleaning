@@ -393,28 +393,25 @@ async function startServer() {
     }
   });
 
-  // Run Test Suite with structured output parsing
+  // Run Test Suite with structured output parsing (10 Mandatory Evaluation Tests TC-01 to TC-10)
   app.post('/api/run-tests', (req, res) => {
-    const cmd = 'python3 -m unittest discover tests/ -v';
+    const cmd = 'python3 -m unittest tests/test_mandatory_suite.py -v';
     exec(cmd, { cwd: __dirname }, (error, stdout, stderr) => {
       const fullOutput = (stdout + '\n' + stderr).trim();
       const passed = !error;
 
       // Parse individual test methods from verbose unittest output
-      // Format: "test_name (module.Class) ... ok" or "FAIL" or "ERROR"
-      const testLines = fullOutput.split('\n');
+      // Handle both "test_name (suite) ... ok" and multi-line docstrings
       const testCases: Array<{ name: string; suite: string; status: 'ok' | 'fail' | 'error'; errorDetail?: string }> = [];
-
-      testLines.forEach(line => {
-        const match = line.match(/^(\w+)\s+\(([^)]+)\)\s+\.\.\.\s+(ok|FAIL|ERROR)/i);
-        if (match) {
-          testCases.push({
-            name: match[1],
-            suite: match[2],
-            status: match[3].toLowerCase() as any,
-          });
-        }
-      });
+      const regex = /(\w+)\s+\(([^)]+)\)[\s\S]*?\.\.\.\s+(ok|FAIL|ERROR)/gi;
+      let m;
+      while ((m = regex.exec(fullOutput)) !== null) {
+        testCases.push({
+          name: m[1],
+          suite: m[2],
+          status: m[3].toLowerCase() as any,
+        });
+      }
 
       res.json({
         success: passed,
