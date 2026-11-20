@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
+import { validateAndExtractTabularFile, validateCSVTextStructure } from './src/utils/fileValidator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,10 +57,81 @@ async function startServer() {
     return records;
   }
 
+  const MAX_UPLOAD_MB = Math.max(1, Number(process.env.MAX_UPLOAD_MB || 10));
+  const TELEMETRY_PATH = path.join(__dirname, 'data', 'enterprise_telemetry.json');
+
   // --- API Endpoints ---
 
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+    res.json({
+      status: 'healthy',
+      engine: 'Validation Engine Operational',
+      maxUploadMb: MAX_UPLOAD_MB,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Strict Backend File Upload Validation (Extension + Magic Bytes + Size + Integrity)
+  app.post('/api/upload-validate', (req, res) => {
+    const { filename, base64Data, maxUploadMb } = req.body || {};
+    if (!filename || typeof filename !== 'string' || !base64Data || typeof base64Data !== 'string') {
+      return res.status(400).json({
+        ok: false,
+        errorCode: 'INVALID_REQUEST',
+        reason: 'Filename and file payload are required.',
+      });
+    }
+
+    try {
+      const buffer = Buffer.from(base64Data, 'base64');
+      const limitMb = Math.min(Math.max(1, Number(maxUploadMb || MAX_UPLOAD_MB)), 50);
+      const validation = validateAndExtractTabularFile(filename, buffer, limitMb);
+      if (!validation.ok) {
+        return res.status(400).json(validation);
+      }
+      return res.json(validation);
+    } catch (e: any) {
+      return res.status(400).json({
+        ok: false,
+        errorCode: 'CORRUPTED_FILE',
+        reason: e?.message || 'Unable to decode uploaded file.',
+      });
+    }
+  });
+
+  // Persistent Enterprise Telemetry & Run History (No mock data — only actual processed runs)
+  app.get('/api/history', (req, res) => {
+    if (fs.existsSync(TELEMETRY_PATH)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(TELEMETRY_PATH, 'utf-8'));
+        return res.json({
+          runs: Array.isArray(parsed.runs) ? parsed.runs : [],
+          reports: Array.isArray(parsed.reports) ? parsed.reports : [],
+          audits: Array.isArray(parsed.audits) ? parsed.audits : [],
+        });
+      } catch {
+        return res.json({ runs: [], reports: [], audits: [] });
+      }
+    }
+    res.json({ runs: [], reports: [], audits: [] });
+  });
+
+  app.post('/api/history', (req, res) => {
+    try {
+      const { runs, reports, audits } = req.body || {};
+      const payload = {
+        runs: Array.isArray(runs) ? runs.slice(0, 100) : [],
+        reports: Array.isArray(reports) ? reports.slice(0, 100) : [],
+        audits: Array.isArray(audits) ? audits.slice(0, 200) : [],
+        updatedAt: new Date().toISOString(),
+      };
+      const dataDir = path.dirname(TELEMETRY_PATH);
+      if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(TELEMETRY_PATH, JSON.stringify(payload, null, 2), 'utf-8');
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   // Get Summary Metrics
@@ -256,6 +328,13 @@ async function startServer() {
     if (!csvContent || typeof csvContent !== 'string') {
       return res.status(400).json({ error: 'csvContent string is required' });
     }
+    if (Buffer.byteLength(csvContent, 'utf-8') > MAX_UPLOAD_MB * 1024 * 1024) {
+      return res.status(413).json({ error: `Dataset exceeds ${MAX_UPLOAD_MB} MB limit` });
+    }
+    const textCheck = validateCSVTextStructure(csvContent);
+    if (!textCheck.ok) {
+      return res.status(400).json({ error: textCheck.reason || 'Unsupported or invalid CSV payload' });
+    }
 
     const tempDir = path.join(__dirname, 'data', 'temp');
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
@@ -290,6 +369,13 @@ async function startServer() {
     const { csvContent, enabledRules } = req.body;
     if (!csvContent || typeof csvContent !== 'string') {
       return res.status(400).json({ error: 'csvContent string is required' });
+    }
+    if (Buffer.byteLength(csvContent, 'utf-8') > MAX_UPLOAD_MB * 1024 * 1024) {
+      return res.status(413).json({ error: `Dataset exceeds ${MAX_UPLOAD_MB} MB limit` });
+    }
+    const textCheck = validateCSVTextStructure(csvContent);
+    if (!textCheck.ok) {
+      return res.status(400).json({ error: textCheck.reason || 'Unsupported or invalid CSV payload' });
     }
 
     const tempDir = path.join(__dirname, 'data', 'temp');

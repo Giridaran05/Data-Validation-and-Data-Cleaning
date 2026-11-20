@@ -1,205 +1,202 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Upload,
-  Play,
-  RotateCw,
-  Download,
+  LayoutDashboard,
+  Database,
+  BookOpen,
+  BarChart3,
+  Sparkles,
   ShieldCheck,
   AlertTriangle,
-  CheckCircle2,
+  Activity,
+  GitCompare,
   FileText,
-  Search,
-  Check,
-  X,
-  Filter,
-  Copy,
-  BookOpen,
-  PackageCheck,
-  FileCheck,
-  Terminal,
-  ArrowRight,
-  Eye,
-  Database,
-  Layers,
-  Sparkles,
-  ChevronRight,
-  GraduationCap,
+  History,
+  Settings as SettingsIcon,
   Users,
+  ChevronLeft,
+  ChevronRight,
+  Menu,
+  X,
+  Bell,
+  Download,
+  ChevronDown,
+  Upload,
+  FileCheck,
+  Play,
+  RotateCw,
+  Check,
+  CheckSquare,
+  Square,
+  ArrowRight,
+  Terminal,
+  Search,
+  Filter,
+  Eye,
+  Copy,
+  GraduationCap,
   Package,
   ShoppingCart,
   HeartPulse,
   DollarSign,
-  Activity,
-  CheckSquare,
-  Square,
-  Menu,
-  ShieldAlert,
-  BarChart3,
-  RefreshCw,
-  Info,
-  CheckCircle
+  FileSpreadsheet,
 } from 'lucide-react';
 import { SAMPLE_PRESETS, SAMPLE_CSV_MAP } from './data/sampleDatasets';
 import {
   parseCSVContent,
   profileDatasetClient,
   cleanDatasetClient,
-  runMandatoryTestsClient,
 } from './utils/clientEngine';
+import {
+  validateAndExtractTabularFile,
+  validateCSVTextStructure,
+} from './utils/fileValidator';
+import {
+  computeAutoCleanedCounts,
+  computeBeforeAfterComparison,
+  computeSixDimensions,
+} from './utils/analytics';
+import {
+  downloadQualityReportExcel,
+  downloadQualityReportPDF,
+} from './utils/reportGenerator';
+import {
+  AppNotification,
+  AuditLogEntry,
+  BeforeAfterSnapshot,
+  CleaningRecommendation,
+  DatasetProfile,
+  EngineSummary,
+  ExceptionItem,
+  NavPageId,
+  ProcessingRunRecord,
+  ReportHistoryRecord,
+  SamplePreset,
+  WorkspaceSettings,
+} from './types/idata';
+import { UnsupportedFileModal } from './components/UnsupportedFileModal';
+import { SplashScreen } from './components/SplashScreen';
+import { DashboardView } from './components/DashboardView';
+import { QualityMonitoringView } from './components/QualityMonitoringView';
+import { DatasetComparisonView } from './components/DatasetComparisonView';
+import {
+  DataCleaningView,
+  DataProfilingView,
+  DataValidationView,
+  ExceptionManagementView,
+  SchemaTaxonomyView,
+} from './components/DataManagementViews';
+import {
+  AuditLogsView,
+  ReportsView,
+  SettingsView,
+} from './components/ReportsAndSystemViews';
 
-interface DatasetProfile {
-  total_rows: number;
-  total_columns: number;
-  headers: string[];
-  domain_key: string;
-  domain_title: string;
-  domain_confidence_pct: number;
-  primary_identifier: string | null;
-  potential_identifiers: string[];
-  total_missing_cells: number;
-  missing_cells_percentage: number;
-  duplicate_rows_count: number;
-  data_quality_score: number;
-  columns: Array<{
-    column_name: string;
-    normalized_name: string;
-    physical_type: string;
-    semantic_type: string;
-    is_potential_identifier: boolean;
-    missing_count: number;
-    missing_percentage: number;
-    unique_count: number;
-    unique_percentage: number;
-    sample_values: string[];
-    details: Record<string, any>;
-  }>;
+const STORAGE_KEYS = {
+  runs: 'idata_v25_runs',
+  reports: 'idata_v25_reports',
+  audits: 'idata_v25_audits',
+  settings: 'idata_v25_settings',
+};
+
+const DEFAULT_SETTINGS: WorkspaceSettings = {
+  maxUploadMb: 10,
+  quarantineStrictness: 'strict',
+  scoringWeights: {
+    completeness: 25,
+    validity: 25,
+    consistency: 15,
+    uniqueness: 15,
+    accuracy: 10,
+    timeliness: 10,
+  },
+};
+
+function safeLoadStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
 }
 
-interface CleaningRecommendation {
-  id: string;
-  category: string;
-  name: string;
-  affected_column: string;
-  description: string;
-  affected_records: number;
-  severity: 'CRITICAL' | 'WARNING' | 'INFO';
-  enabled: boolean;
-  preview: {
-    before: string;
-    after: string;
-  };
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const slice = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...slice);
+  }
+  return btoa(binary);
 }
-
-interface EngineSummary {
-  total_records: number;
-  valid_records: number;
-  quarantined_records: number;
-  duplicate_records: number;
-  pass_rate_pct: number;
-  quarantine_rate_pct: number;
-  execution_time_ms: number;
-  domain_detected?: string;
-  data_quality_score?: number;
-  total_exceptions?: number;
-}
-
-interface ExceptionItem {
-  row_number: string;
-  record_id: string;
-  field_name: string;
-  rule_id: string;
-  violation_type: string;
-  severity: string;
-  raw_value: string;
-  expected: string;
-  error_message: string;
-  suggested_correction?: string;
-}
-
-interface SamplePreset {
-  id: string;
-  name: string;
-  domain: string;
-  filename: string;
-  description: string;
-  recordCount: number;
-}
-
-// 10 Mandatory Evaluation Test Cases matching academic rubric
-const MANDATORY_TEN_TESTS = [
-  { id: 'TC-01', method: 'test_tc01_valid_csv_input', scenario: 'Valid CSV input', expected: 'File loads and processing completes successfully' },
-  { id: 'TC-02', method: 'test_tc02_missing_required_column', scenario: 'Missing required column', expected: 'Schema issue is detected and reported' },
-  { id: 'TC-03', method: 'test_tc03_blank_mandatory_value', scenario: 'Blank mandatory value', expected: 'Missing-value issue is identified and quarantined' },
-  { id: 'TC-04', method: 'test_tc04_incorrect_data_type', scenario: 'Incorrect data type', expected: 'Type mismatch is identified and flagged' },
-  { id: 'TC-05', method: 'test_tc05_duplicate_record_key', scenario: 'Duplicate record/key', expected: 'Duplicate primary key is detected as configured' },
-  { id: 'TC-06', method: 'test_tc06_invalid_date_format', scenario: 'Invalid date/format', expected: 'Malformed date format issue is recorded' },
-  { id: 'TC-07', method: 'test_tc07_empty_csv', scenario: 'Empty CSV', expected: 'Readable validation error is handled gracefully' },
-  { id: 'TC-08', method: 'test_tc08_malformed_unreadable_file', scenario: 'Malformed/unreadable file', expected: 'Processing stops safely with descriptive message' },
-  { id: 'TC-09', method: 'test_tc09_valid_business_rule_boundary', scenario: 'Valid business-rule boundary', expected: 'Boundary values handled correctly' },
-  { id: 'TC-10', method: 'test_tc10_output_generation', scenario: 'Output generation', expected: 'Clean dataset and exception report are created' },
-];
 
 export default function App() {
-  // Input State
+  // Startup Splash Screen State
+  const [showSplash, setShowSplash] = useState<boolean>(true);
+
+  // Navigation & Chrome State
+  const [activePage, setActivePage] = useState<NavPageId>('dashboard');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
+  const [showNotificationsMenu, setShowNotificationsMenu] = useState<boolean>(false);
+  const [showExportMenu, setShowExportMenu] = useState<boolean>(false);
+
+  // Engine Operational Health
+  const [engineHealthy, setEngineHealthy] = useState<boolean>(true);
+  const [processingStatus, setProcessingStatus] = useState<'Idle' | 'Profiling' | 'Processing' | 'Validated'>('Idle');
+
+  // Active Dataset & Preserved Original State
   const [inputMode, setInputMode] = useState<'sample' | 'upload' | 'paste'>('sample');
   const [selectedSampleId, setSelectedSampleId] = useState<string>('orders');
   const [samplePresets, setSamplePresets] = useState<SamplePreset[]>(SAMPLE_PRESETS);
   const [fileName, setFileName] = useState<string>('orders_raw.csv');
+  const [activeFormat, setActiveFormat] = useState<'CSV' | 'XLSX' | 'XLS'>('CSV');
   const [csvContent, setCsvContent] = useState<string>('');
+  const [originalRecords, setOriginalRecords] = useState<Record<string, string>[]>([]);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Workflow Pipeline Steps (1 to 4)
-  const [workflowStep, setWorkflowStep] = useState<1 | 2 | 3 | 4>(1);
-
-  // Profiler & Assistant State
+  // Profiler & Cleaning Configuration State
   const [isProfiling, setIsProfiling] = useState<boolean>(false);
   const [profile, setProfile] = useState<DatasetProfile | null>(null);
   const [recommendations, setRecommendations] = useState<CleaningRecommendation[]>([]);
   const [enabledRuleMap, setEnabledRuleMap] = useState<Record<string, boolean>>({});
 
-  // Execution & Output State
+  // Validation Output State
   const [isValidating, setIsValidating] = useState<boolean>(false);
   const [summary, setSummary] = useState<EngineSummary | null>(null);
   const [cleanRecords, setCleanRecords] = useState<Record<string, string>[]>([]);
   const [exceptions, setExceptions] = useState<ExceptionItem[]>([]);
-  const [rawRecords, setRawRecords] = useState<Record<string, string>[]>([]);
+  const [comparisonSnapshot, setComparisonSnapshot] = useState<BeforeAfterSnapshot | null>(null);
   const [engineLogs, setEngineLogs] = useState<string>('');
   const [showLogs, setShowLogs] = useState<boolean>(false);
 
-  // Output Views & Filters
+  // Studio Output Filters & Detail Inspector
   const [outputView, setOutputView] = useState<'clean' | 'exceptions'>('clean');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [exceptionTypeFilter, setExceptionTypeFilter] = useState<string>('ALL');
-
-  // Modals & Navigation Drawers
-  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
-  const [showDataDictionaryModal, setShowDataDictionaryModal] = useState<boolean>(false);
-  const [showDeliverablesModal, setShowDeliverablesModal] = useState<boolean>(false);
-  const [showTestSuiteModal, setShowTestSuiteModal] = useState<boolean>(false);
   const [selectedRecordForDetail, setSelectedRecordForDetail] = useState<any | null>(null);
   const [copiedDetail, setCopiedDetail] = useState<boolean>(false);
 
-  // Test Suite Runner (10 Mandatory Tests)
-  const [testOutput, setTestOutput] = useState<string>('');
-  const [isRunningTests, setIsRunningTests] = useState<boolean>(false);
-  const [testResultsMap, setTestResultsMap] = useState<Record<string, 'ok' | 'fail'>>({
-    'test_tc01_valid_csv_input': 'ok',
-    'test_tc02_missing_required_column': 'ok',
-    'test_tc03_blank_mandatory_value': 'ok',
-    'test_tc04_incorrect_data_type': 'ok',
-    'test_tc05_duplicate_record_key': 'ok',
-    'test_tc06_invalid_date_format': 'ok',
-    'test_tc07_empty_csv': 'ok',
-    'test_tc08_malformed_unreadable_file': 'ok',
-    'test_tc09_valid_business_rule_boundary': 'ok',
-    'test_tc10_output_generation': 'ok',
-  });
+  // Unsupported File Modal State
+  const [unsupportedModal, setUnsupportedModal] = useState<{
+    isOpen: boolean;
+    fileName?: string;
+    reason?: string;
+  }>({ isOpen: false });
 
-  // Active Navigation Anchor
-  const [activeNav, setActiveNav] = useState<string>('dashboard');
+  // Real Enterprise Telemetry & Governance State (Zero Fake Data)
+  const [runs, setRuns] = useState<ProcessingRunRecord[]>(() => safeLoadStorage(STORAGE_KEYS.runs, []));
+  const [reports, setReports] = useState<ReportHistoryRecord[]>(() => safeLoadStorage(STORAGE_KEYS.reports, []));
+  const [audits, setAudits] = useState<AuditLogEntry[]>(() => safeLoadStorage(STORAGE_KEYS.audits, []));
+  const [settings, setSettings] = useState<WorkspaceSettings>(() =>
+    safeLoadStorage(STORAGE_KEYS.settings, DEFAULT_SETTINGS)
+  );
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
-  // Helper: fetch JSON safely, returning null if backend is unavailable or returns HTML (e.g., static Netlify host)
+  // Safe JSON fetch helper (returns null if backend unavailable or returns HTML on static hosts)
   const fetchJsonSafe = async <T = any>(url: string, init?: RequestInit): Promise<T | null> => {
     try {
       const res = await fetch(url, init);
@@ -212,105 +209,268 @@ export default function App() {
     }
   };
 
-  // Load sample presets on mount
-  useEffect(() => {
-    loadPresets();
-  }, []);
-
-  const loadPresets = async () => {
-    const presets = await fetchJsonSafe<SamplePreset[]>('/api/sample-datasets');
-    if (Array.isArray(presets) && presets.length > 0) {
-      setSamplePresets(presets);
-    } else {
-      setSamplePresets(SAMPLE_PRESETS);
+  // Persist history to localStorage + backend when available
+  const persistTelemetry = async (
+    nextRuns: ProcessingRunRecord[],
+    nextReports: ReportHistoryRecord[],
+    nextAudits: AuditLogEntry[]
+  ) => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.runs, JSON.stringify(nextRuns));
+      localStorage.setItem(STORAGE_KEYS.reports, JSON.stringify(nextReports));
+      localStorage.setItem(STORAGE_KEYS.audits, JSON.stringify(nextAudits));
+    } catch {
+      // Ignore quota issues
     }
-    await loadSamplePreset('orders');
+    await fetchJsonSafe('/api/history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runs: nextRuns, reports: nextReports, audits: nextAudits }),
+    });
   };
 
-  const loadSamplePreset = async (presetId: string) => {
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(settings));
+    } catch {}
+  }, [settings]);
+
+  const addNotification = (
+    title: string,
+    message: string,
+    type: AppNotification['type'] = 'info'
+  ) => {
+    setNotifications((prev) => [
+      {
+        id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: new Date().toISOString(),
+        title,
+        message,
+        type,
+        read: false,
+      },
+      ...prev.slice(0, 19),
+    ]);
+  };
+
+  const appendAudit = (
+    action: string,
+    target: string,
+    status: AuditLogEntry['status'],
+    details: string,
+    currentRuns = runs,
+    currentReports = reports
+  ) => {
+    const entry: AuditLogEntry = {
+      id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      actor: 'System Operator',
+      action,
+      target,
+      status,
+      details,
+    };
+    const nextAudits = [entry, ...audits].slice(0, 200);
+    setAudits(nextAudits);
+    persistTelemetry(currentRuns, currentReports, nextAudits);
+    return nextAudits;
+  };
+
+  // Initial Load: Health check, Backend History Sync, and Initial Sample Dataset Profile
+  useEffect(() => {
+    const init = async () => {
+      const health = await fetchJsonSafe<{ status: string; maxUploadMb?: number }>('/api/health');
+      setEngineHealthy(health ? health.status === 'healthy' : true);
+
+      const historyData = await fetchJsonSafe<{
+        runs: ProcessingRunRecord[];
+        reports: ReportHistoryRecord[];
+        audits: AuditLogEntry[];
+      }>('/api/history');
+      if (historyData && (historyData.runs.length > 0 || historyData.reports.length > 0 || historyData.audits.length > 0)) {
+        if (historyData.runs.length > runs.length) setRuns(historyData.runs);
+        if (historyData.reports.length > reports.length) setReports(historyData.reports);
+        if (historyData.audits.length > audits.length) setAudits(historyData.audits);
+      }
+
+      const presets = await fetchJsonSafe<SamplePreset[]>('/api/sample-datasets');
+      if (Array.isArray(presets) && presets.length > 0) {
+        setSamplePresets(presets);
+      } else {
+        setSamplePresets(SAMPLE_PRESETS);
+      }
+
+      await loadSamplePreset('orders', false);
+    };
+    init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const loadSamplePreset = async (presetId: string, recordAudit = true) => {
     setSelectedSampleId(presetId);
     setInputMode('sample');
+    setActiveFormat('CSV');
     setSummary(null);
     setCleanRecords([]);
     setExceptions([]);
+    setComparisonSnapshot(null);
 
     const apiData = await fetchJsonSafe<{ content: string; records?: Record<string, string>[] }>(
       `/api/sample-datasets/${presetId}`
     );
 
-    if (apiData && apiData.content) {
-      const presetMeta = SAMPLE_PRESETS.find((p) => p.id === presetId);
-      setFileName(presetMeta?.filename || `${presetId}_sample.csv`);
-      setCsvContent(apiData.content);
-      setRawRecords(apiData.records || parseCSVContent(apiData.content).records);
-      await analyzeDataset(apiData.content);
-      return;
+    const presetMeta = SAMPLE_PRESETS.find((p) => p.id === presetId) || SAMPLE_PRESETS[0];
+    const resolvedContent = apiData?.content || SAMPLE_CSV_MAP[presetId] || SAMPLE_CSV_MAP.orders;
+    const parsedRecords = apiData?.records || parseCSVContent(resolvedContent).records;
+
+    setFileName(presetMeta.filename);
+    setCsvContent(resolvedContent);
+    setOriginalRecords(parsedRecords);
+
+    if (recordAudit) {
+      appendAudit(
+        'PRESET_SELECTED',
+        presetMeta.filename,
+        'SUCCESS',
+        `Loaded benchmark dataset (${parsedRecords.length} records)`
+      );
     }
 
-    // Client-side static fallback (for Netlify / static builds)
-    const fallbackContent = SAMPLE_CSV_MAP[presetId] || SAMPLE_CSV_MAP.orders;
-    const presetMeta = SAMPLE_PRESETS.find((p) => p.id === presetId) || SAMPLE_PRESETS[0];
-    setFileName(presetMeta.filename);
-    setCsvContent(fallbackContent);
-    setRawRecords(parseCSVContent(fallbackContent).records);
-    await analyzeDataset(fallbackContent);
+    await analyzeDataset(resolvedContent);
   };
 
-  // Automatic Intelligent Profiler
   const analyzeDataset = async (content: string) => {
     if (!content.trim()) return;
     setIsProfiling(true);
+    setProcessingStatus('Profiling');
     try {
-      const apiData = await fetchJsonSafe<{ profile: DatasetProfile; recommendations: CleaningRecommendation[] }>(
-        '/api/profile-dataset',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ csvContent: content }),
-        }
-      );
+      const apiData = await fetchJsonSafe<{
+        profile: DatasetProfile;
+        recommendations: CleaningRecommendation[];
+      }>('/api/profile-dataset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csvContent: content }),
+      });
 
       const resolved =
-        apiData && apiData.profile
-          ? apiData
-          : profileDatasetClient(content);
+        apiData && apiData.profile ? apiData : profileDatasetClient(content);
 
       setProfile(resolved.profile);
       setRecommendations(resolved.recommendations || []);
       const ruleMap: Record<string, boolean> = {};
-      (resolved.recommendations || []).forEach((r: CleaningRecommendation) => {
+      (resolved.recommendations || []).forEach((r) => {
         ruleMap[r.id] = r.enabled;
       });
       setEnabledRuleMap(ruleMap);
-      setWorkflowStep(2);
+      setProcessingStatus('Idle');
     } catch (e) {
       console.error('Profiling error:', e);
+      setProcessingStatus('Idle');
     } finally {
       setIsProfiling(false);
     }
   };
 
-  // Handle User File Upload
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Strict Upload Processing (.csv, .xlsx, .xls ONLY; client + backend signature verification)
+  const processUploadedFile = async (file: File) => {
+    try {
+      const buffer = await file.arrayBuffer();
+
+      // 1. Client-side immediate validation (extension, magic bytes, size, corruption)
+      const clientCheck = validateAndExtractTabularFile(file.name, buffer, settings.maxUploadMb);
+      if (!clientCheck.ok || !clientCheck.csvContent) {
+        setUnsupportedModal({
+          isOpen: true,
+          fileName: file.name,
+          reason: clientCheck.reason,
+        });
+        appendAudit(
+          'UPLOAD_BLOCKED',
+          file.name,
+          'BLOCKED',
+          clientCheck.reason || 'Unsupported file format rejected.'
+        );
+        addNotification(
+          'Unsupported File Format',
+          `Blocked "${file.name}". Only .csv, .xlsx, and .xls files are accepted.`,
+          'error'
+        );
+        return;
+      }
+
+      // 2. Backend signature validation when Express server is available
+      try {
+        const res = await fetch('/api/upload-validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: file.name,
+            base64Data: arrayBufferToBase64(buffer),
+            maxUploadMb: settings.maxUploadMb,
+          }),
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (ct.toLowerCase().includes('application/json')) {
+          const backendResult = await res.json();
+          if (!res.ok || !backendResult.ok) {
+            setUnsupportedModal({
+              isOpen: true,
+              fileName: file.name,
+              reason: backendResult.reason || 'Rejected by backend file signature verifier.',
+            });
+            appendAudit(
+              'UPLOAD_BLOCKED_SERVER',
+              file.name,
+              'BLOCKED',
+              backendResult.reason || 'Backend rejected upload.'
+            );
+            return;
+          }
+        }
+      } catch {
+        // Static deployment mode (Netlify): clientCheck already validated signature & content
+      }
+
+      const parsed = parseCSVContent(clientCheck.csvContent);
+      setFileName(file.name);
+      setActiveFormat(clientCheck.format || 'CSV');
+      setInputMode('upload');
+      setCsvContent(clientCheck.csvContent);
+      setOriginalRecords(parsed.records);
+      setSummary(null);
+      setCleanRecords([]);
+      setExceptions([]);
+      setComparisonSnapshot(null);
+
+      appendAudit(
+        'UPLOAD_ACCEPTED',
+        file.name,
+        'SUCCESS',
+        `Validated ${clientCheck.format} (${parsed.records.length} rows, ${(file.size / 1024).toFixed(1)} KB)`
+      );
+      addNotification(
+        'Dataset Loaded',
+        `${file.name} (${parsed.records.length} rows) passed format & signature checks.`,
+        'info'
+      );
+
+      await analyzeDataset(clientCheck.csvContent);
+    } catch (err: any) {
+      setUnsupportedModal({
+        isOpen: true,
+        fileName: file.name,
+        reason: err?.message || 'Unable to parse uploaded file.',
+      });
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     processUploadedFile(file);
-  };
-
-  const processUploadedFile = (file: File) => {
-    setFileName(file.name);
-    setInputMode('upload');
-    setSummary(null);
-    setCleanRecords([]);
-    setExceptions([]);
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = (event.target?.result as string) || '';
-      setCsvContent(text);
-      setRawRecords(parseCSVContent(text).records);
-      analyzeDataset(text);
-    };
-    reader.readAsText(file);
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -321,19 +481,47 @@ export default function App() {
     }
   };
 
-  const toggleRecommendation = (id: string) => {
-    setEnabledRuleMap(prev => ({ ...prev, [id]: !prev[id] }));
+  const handlePasteContentChange = (text: string) => {
+    setCsvContent(text);
+    const check = validateCSVTextStructure(text);
+    if (check.ok) {
+      setFileName('pasted_dataset.csv');
+      setActiveFormat('CSV');
+      setOriginalRecords(parseCSVContent(text).records);
+      setSummary(null);
+      setCleanRecords([]);
+      setExceptions([]);
+      setComparisonSnapshot(null);
+      analyzeDataset(text);
+    }
   };
 
-  // Run Cleaning and Validation Pipeline
+  const toggleRecommendation = (id: string) => {
+    setEnabledRuleMap((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  // Compute Six Dimensions dynamically from actual dataset & exceptions
+  const sixDimensions = useMemo(() => {
+    if (!profile) return [];
+    return computeSixDimensions(
+      profile.headers,
+      originalRecords,
+      cleanRecords,
+      exceptions,
+      profile,
+      settings.scoringWeights
+    );
+  }, [profile, originalRecords, cleanRecords, exceptions, settings.scoringWeights]);
+
+  // Execute Cleaning & Validation Pipeline (Records actual telemetry to Dashboard & Comparison)
   const handleExecutePipeline = async () => {
     const contentToSend = csvContent.trim();
-    if (!contentToSend) {
-      return;
-    }
+    if (!contentToSend) return;
 
     setIsValidating(true);
+    setProcessingStatus('Processing');
     const startTime = performance.now();
+
     try {
       const apiData = await fetchJsonSafe<{
         summary: EngineSummary;
@@ -354,1508 +542,1352 @@ export default function App() {
         ? apiData!
         : cleanDatasetClient(contentToSend, enabledRuleMap);
 
-      if (data.summary) setSummary(data.summary);
-      if (data.profile) setProfile(data.profile);
-      setCleanRecords(data.cleanedRecords || []);
-      setExceptions(data.exceptionRecords || []);
+      const resolvedProfile = data.profile || profile;
+      const parsedOriginal = parseCSVContent(contentToSend).records;
+      const cleanOut = data.cleanedRecords || [];
+      const excOut = data.exceptionRecords || [];
 
-      const elapsed = (performance.now() - startTime).toFixed(2);
+      setOriginalRecords(parsedOriginal);
+      if (resolvedProfile) setProfile(resolvedProfile);
+      setCleanRecords(cleanOut);
+      setExceptions(excOut);
+
+      let snapshot: BeforeAfterSnapshot | null = null;
+      let autoCounts = { autoCleanedRecords: 0, autoCleanedCells: 0 };
+
+      if (resolvedProfile) {
+        snapshot = computeBeforeAfterComparison(
+          resolvedProfile.headers,
+          parsedOriginal,
+          cleanOut,
+          excOut,
+          resolvedProfile,
+          recommendations,
+          enabledRuleMap
+        );
+        setComparisonSnapshot(snapshot);
+        autoCounts = computeAutoCleanedCounts(
+          resolvedProfile.headers,
+          parsedOriginal,
+          cleanOut,
+          resolvedProfile
+        );
+      }
+
+      const elapsed = Math.round((performance.now() - startTime) * 100) / 100;
+      const enrichedSummary: EngineSummary = {
+        ...data.summary,
+        execution_time_ms: data.summary?.execution_time_ms || elapsed,
+        auto_cleaned_records: autoCounts.autoCleanedRecords,
+        auto_cleaned_cells: autoCounts.autoCleanedCells,
+      };
+      setSummary(enrichedSummary);
+
       setEngineLogs(
-        `[UNIVERSAL ENGINE] Processing completed in ${elapsed}ms\n` +
-        `[DOMAIN DETECTED] ${data.summary?.domain_detected || 'General Tabular'}\n` +
-        `[DATASET PROFILE] ${data.profile?.total_rows || 0} rows, ${data.profile?.total_columns || 0} columns analyzed\n` +
-        `[PARTITIONING] ${data.cleanedRecords?.length || 0} Clean Warehouse Records (Pass Rate: ${data.summary?.pass_rate_pct}%)\n` +
-        `[EXCEPTIONS] ${data.exceptionRecords?.length || 0} Quarantined Records logged to Exception Register\n` +
-        `[TELEMETRY] ${usedBackend ? 'Native Python 3.10 Standard Library' : 'Browser TypeScript Engine (Static Mode)'}`
+        `[UNIVERSAL ENGINE] Processing completed in ${enrichedSummary.execution_time_ms}ms\n` +
+          `[DOMAIN DETECTED] ${enrichedSummary.domain_detected || 'General Tabular'}\n` +
+          `[DATASET PROFILE] ${resolvedProfile?.total_rows || 0} rows, ${resolvedProfile?.total_columns || 0} columns analyzed\n` +
+          `[PARTITIONING] ${cleanOut.length} Clean Warehouse Records (Pass Rate: ${enrichedSummary.pass_rate_pct}%)\n` +
+          `[QUARANTINE] ${enrichedSummary.quarantined_records} Records isolated to Exception Register (${excOut.length} exception entries)\n` +
+          `[AUTO-CLEANED] ${autoCounts.autoCleanedRecords} records (${autoCounts.autoCleanedCells} cells standardized)\n` +
+          `[RUNTIME] ${usedBackend ? 'Python 3 Validation Engine' : 'Static Client Engine Fallback'}`
       );
 
-      setRawRecords(parseCSVContent(contentToSend).records);
-      setWorkflowStep(4);
+      // Record real historical run
+      if (resolvedProfile) {
+        const errorsByCat: Record<string, number> = {};
+        for (const ex of excOut) {
+          errorsByCat[ex.violation_type] = (errorsByCat[ex.violation_type] || 0) + 1;
+        }
+        const dims = computeSixDimensions(
+          resolvedProfile.headers,
+          parsedOriginal,
+          cleanOut,
+          excOut,
+          resolvedProfile,
+          settings.scoringWeights
+        );
+        const dimMap: Record<string, number | null> = {};
+        dims.forEach((d) => {
+          dimMap[d.key] = d.percentage;
+        });
+
+        const newRun: ProcessingRunRecord = {
+          id: `run-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          datasetName: fileName,
+          fileFormat: activeFormat,
+          domainKey: resolvedProfile.domain_key,
+          domainTitle: resolvedProfile.domain_title,
+          totalRecords: enrichedSummary.total_records,
+          validRecords: enrichedSummary.valid_records,
+          invalidRecords: enrichedSummary.quarantined_records,
+          quarantinedRecords: enrichedSummary.quarantined_records,
+          duplicateRecords: enrichedSummary.duplicate_records,
+          missingValuesDetected: resolvedProfile.total_missing_cells,
+          autoCleanedRecords: autoCounts.autoCleanedRecords,
+          dataQualityScore: snapshot ? snapshot.before.qualityScore : resolvedProfile.data_quality_score,
+          afterQualityScore: snapshot ? snapshot.after.qualityScore : resolvedProfile.data_quality_score,
+          executionTimeMs: enrichedSummary.execution_time_ms,
+          status:
+            enrichedSummary.quarantined_records === 0
+              ? 'Completed'
+              : 'Completed with Exceptions',
+          errorsByCategory: errorsByCat,
+          missingByColumn: resolvedProfile.columns.map((c) => ({
+            column: c.column_name,
+            count: c.missing_count,
+          })),
+          operationsCount: recommendations.filter((r) => enabledRuleMap[r.id] ?? r.enabled).length,
+          dimensionsSummary: dimMap,
+        };
+
+        const nextRuns = [newRun, ...runs].slice(0, 100);
+        setRuns(nextRuns);
+
+        const auditEntry: AuditLogEntry = {
+          id: `aud-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          actor: 'System Operator',
+          action: 'VALIDATION_EXECUTED',
+          target: fileName,
+          status: enrichedSummary.quarantined_records === 0 ? 'SUCCESS' : 'WARNING',
+          details: `${enrichedSummary.valid_records} clean · ${enrichedSummary.quarantined_records} quarantined · ${autoCounts.autoCleanedRecords} auto-cleaned`,
+        };
+        const nextAudits = [auditEntry, ...audits].slice(0, 200);
+        setAudits(nextAudits);
+        persistTelemetry(nextRuns, reports, nextAudits);
+      }
+
+      setProcessingStatus('Validated');
       setOutputView('clean');
-    } catch (e: any) {
+      addNotification(
+        'Validation Completed',
+        `${fileName}: ${cleanOut.length} clean records, ${enrichedSummary.quarantined_records} quarantined.`,
+        enrichedSummary.quarantined_records > 0 ? 'warning' : 'success'
+      );
+    } catch (e) {
       console.error('Validation error:', e);
+      setProcessingStatus('Idle');
     } finally {
       setIsValidating(false);
     }
   };
 
-  // Run 10 Mandatory Tests Suite
-  const handleRunTests = async () => {
-    setIsRunningTests(true);
-    try {
-      const apiData = await fetchJsonSafe<{
-        output?: string;
-        testCases?: Array<{ name: string; status: string }>;
-      }>('/api/run-tests', { method: 'POST' });
-
-      const data =
-        apiData && Array.isArray(apiData.testCases) && apiData.testCases.length > 0
-          ? apiData
-          : runMandatoryTestsClient();
-
-      setTestOutput(data.output || '');
-      if (data.testCases && data.testCases.length > 0) {
-        const map: Record<string, 'ok' | 'fail'> = {};
-        data.testCases.forEach((t) => {
-          map[t.name] = t.status === 'ok' ? 'ok' : 'fail';
-        });
-        setTestResultsMap(map);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsRunningTests(false);
-    }
-  };
-
-  // Export CSV Helper
-  const downloadCSV = (content: any[], filename: string) => {
-    if (!content || content.length === 0) {
+  const handleGenerateQualityComparison = () => {
+    if (!summary || !profile) {
+      handleExecutePipeline();
       return;
     }
+    const snapshot = computeBeforeAfterComparison(
+      profile.headers,
+      originalRecords,
+      cleanRecords,
+      exceptions,
+      profile,
+      recommendations,
+      enabledRuleMap
+    );
+    setComparisonSnapshot(snapshot);
+    addNotification('Quality Comparison Refreshed', `Updated Before & After matrix for ${fileName}.`, 'info');
+  };
+
+  const recordReportExport = (format: ReportHistoryRecord['format']) => {
+    const newRep: ReportHistoryRecord = {
+      id: `rep-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      datasetName: fileName,
+      format,
+      recordCount: cleanRecords.length,
+      quarantinedCount: summary?.quarantined_records ?? exceptions.length,
+      qualityScoreAfter: comparisonSnapshot?.after.qualityScore ?? profile?.data_quality_score ?? 0,
+    };
+    const nextReports = [newRep, ...reports].slice(0, 100);
+    setReports(nextReports);
+    appendAudit('REPORT_EXPORTED', fileName, 'SUCCESS', `Exported ${format} report`, runs, nextReports);
+  };
+
+  const handleDownloadPDFReport = () => {
+    if (!profile || !comparisonSnapshot) return;
+    downloadQualityReportPDF({
+      datasetName: fileName,
+      fileFormat: activeFormat,
+      profile,
+      comparison: comparisonSnapshot,
+      dimensions: sixDimensions,
+      cleanedRecords: cleanRecords,
+      exceptionRecords: exceptions,
+      passRatePct: summary?.pass_rate_pct ?? 0,
+    });
+    recordReportExport('PDF');
+    addNotification('PDF Report Downloaded', `Generated PDF Quality Report for ${fileName}.`, 'success');
+  };
+
+  const handleDownloadExcelReport = () => {
+    if (!profile || !comparisonSnapshot) return;
+    downloadQualityReportExcel({
+      datasetName: fileName,
+      fileFormat: activeFormat,
+      profile,
+      comparison: comparisonSnapshot,
+      dimensions: sixDimensions,
+      cleanedRecords: cleanRecords,
+      exceptionRecords: exceptions,
+      passRatePct: summary?.pass_rate_pct ?? 0,
+    });
+    recordReportExport('EXCEL');
+    addNotification('Excel Report Downloaded', `Generated multi-sheet Excel Quality Report for ${fileName}.`, 'success');
+  };
+
+  const downloadCSV = (content: any[], downloadName: string, kind: 'CSV_CLEAN' | 'CSV_EXCEPTIONS') => {
+    if (!content || content.length === 0) return;
     const headers = Object.keys(content[0]);
     const csvRows = [
       headers.join(','),
-      ...content.map(row => headers.map(h => `"${String(row[h] ?? '').replace(/"/g, '""')}"`).join(','))
+      ...content.map((row) =>
+        headers.map((h) => `"${String(row[h] ?? '').replace(/"/g, '""')}"`).join(',')
+      ),
     ];
 
     const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', filename);
+    link.setAttribute('download', downloadName);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    recordReportExport(kind);
   };
 
-  // Filtered exception records
-  const filteredExceptions = exceptions.filter(item => {
+  const handleClearHistory = () => {
+    setRuns([]);
+    setReports([]);
+    setAudits([]);
+    persistTelemetry([], [], []);
+    addNotification('History Cleared', 'Stored telemetry runs, reports, and audit logs have been reset.', 'info');
+  };
+
+  const filteredExceptions = exceptions.filter((item) => {
     const matchesFilter = exceptionTypeFilter === 'ALL' || item.violation_type === exceptionTypeFilter;
+    const q = searchQuery.toLowerCase();
     const matchesSearch =
-      searchQuery === '' ||
-      item.record_id?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.field_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.error_message?.toLowerCase().includes(searchQuery.toLowerCase());
+      q === '' ||
+      item.record_id?.toLowerCase().includes(q) ||
+      item.field_name?.toLowerCase().includes(q) ||
+      item.error_message?.toLowerCase().includes(q);
     return matchesFilter && matchesSearch;
   });
 
-  // Filtered clean records
-  const filteredClean = cleanRecords.filter(item => {
+  const filteredClean = cleanRecords.filter((item) => {
     if (!searchQuery) return true;
-    const query = searchQuery.toLowerCase();
-    return Object.values(item).some(val => String(val).toLowerCase().includes(query));
+    const q = searchQuery.toLowerCase();
+    return Object.values(item).some((val) => String(val).toLowerCase().includes(q));
   });
 
-  // Domain Icon Helper
   const getDomainIcon = (domainKey: string = '') => {
     switch (domainKey) {
-      case 'COLLEGE_STUDENT': return <GraduationCap className="w-4 h-4 text-[#5D94D9]" />;
-      case 'EMPLOYEE_HR': return <Users className="w-4 h-4 text-[#5D94D9]" />;
-      case 'PRODUCT_INVENTORY': return <Package className="w-4 h-4 text-[#5D94D9]" />;
-      case 'ECOMMERCE_ORDER': return <ShoppingCart className="w-4 h-4 text-[#5D94D9]" />;
-      case 'HEALTHCARE_PATIENT': return <HeartPulse className="w-4 h-4 text-[#5D94D9]" />;
-      case 'BANKING_FINANCE': return <DollarSign className="w-4 h-4 text-[#5D94D9]" />;
-      default: return <Activity className="w-4 h-4 text-[#5D94D9]" />;
+      case 'COLLEGE_STUDENT':
+      case 'STUDENTS':
+        return <GraduationCap className="w-4 h-4 text-[#3659B8]" />;
+      case 'EMPLOYEE_HR':
+      case 'EMPLOYEES':
+        return <Users className="w-4 h-4 text-[#3659B8]" />;
+      case 'PRODUCT_INVENTORY':
+      case 'PRODUCTS':
+        return <Package className="w-4 h-4 text-[#3659B8]" />;
+      case 'ECOMMERCE_ORDER':
+      case 'ORDERS':
+        return <ShoppingCart className="w-4 h-4 text-[#3659B8]" />;
+      case 'HEALTHCARE_PATIENT':
+      case 'HEALTHCARE':
+        return <HeartPulse className="w-4 h-4 text-[#3659B8]" />;
+      case 'BANKING_FINANCE':
+        return <DollarSign className="w-4 h-4 text-[#3659B8]" />;
+      default:
+        return <Activity className="w-4 h-4 text-[#3659B8]" />;
     }
   };
 
-  return (
-    <div className="min-h-screen bg-[#F5F7FC] text-[#20233A] flex flex-col font-sans selection:bg-[#5D94D9]/20 selection:text-[#17154F]">
-      
-      {/* ========================================================================= */}
-      {/* RESPONSIVE LAYOUT CONTAINER (SIDEBAR + MAIN CANVAS)                       */}
-      {/* ========================================================================= */}
-      <div className="flex-1 flex flex-row min-h-screen relative">
+  // Exact Required Sidebar Structure
+  const sidebarGroups: Array<{
+    group: string;
+    items: Array<{ id: NavPageId; label: string; icon: React.ComponentType<{ className?: string }> }>;
+  }> = [
+    {
+      group: 'OVERVIEW',
+      items: [{ id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }],
+    },
+    {
+      group: 'DATA MANAGEMENT',
+      items: [
+        { id: 'studio', label: 'CSV Engine Studio', icon: Database },
+        { id: 'taxonomy', label: 'Schema Taxonomy', icon: BookOpen },
+        { id: 'profiling', label: 'Data Profiling', icon: BarChart3 },
+        { id: 'cleaning', label: 'Data Cleaning', icon: Sparkles },
+        { id: 'validation', label: 'Data Validation', icon: ShieldCheck },
+        { id: 'exceptions', label: 'Exception Management', icon: AlertTriangle },
+      ],
+    },
+    {
+      group: 'DATA QUALITY',
+      items: [
+        { id: 'monitoring', label: 'Quality Monitoring', icon: Activity },
+        { id: 'comparison', label: 'Dataset Comparison', icon: GitCompare },
+        { id: 'quality-reports', label: 'Data Quality Reports', icon: FileText },
+      ],
+    },
+    {
+      group: 'REPORTS & AUDIT',
+      items: [
+        { id: 'audit-logs', label: 'Audit Logs', icon: History },
+      ],
+    },
+    {
+      group: 'SYSTEM',
+      items: [
+        { id: 'settings', label: 'Settings', icon: SettingsIcon },
+      ],
+    },
+  ];
 
-        {/* ----------------------------------------------------------------------- */}
-        {/* MOBILE SIDEBAR BACKDROP                                                 */}
-        {/* ----------------------------------------------------------------------- */}
+  const unreadCount = notifications.filter((n) => !n.read).length;
+
+  return (
+    <div className="min-h-screen bg-[#F5F7FC] text-[#172554] flex flex-col font-sans">
+      {showSplash && (
+        <SplashScreen
+          engineHealthy={engineHealthy}
+          onComplete={() => setShowSplash(false)}
+        />
+      )}
+      <div className="flex-1 flex flex-row min-h-screen relative">
+        {/* Mobile Sidebar Backdrop */}
         {isMobileSidebarOpen && (
           <div
             onClick={() => setIsMobileSidebarOpen(false)}
-            className="fixed inset-0 bg-[#17154F]/60 backdrop-blur-sm z-40 lg:hidden transition-opacity"
+            className="fixed inset-0 bg-[#171653]/60 z-40 lg:hidden"
           />
         )}
 
-        {/* ----------------------------------------------------------------------- */}
-        {/* DESKTOP & MOBILE SIDEBAR (DEEP NAVY BRAND IDENTITY #17154F / #201D64)   */}
-        {/* ----------------------------------------------------------------------- */}
+        {/* Collapsible Enterprise Sidebar */}
         <aside
-          className={`fixed lg:sticky top-0 left-0 h-screen w-64 bg-[#17154F] text-white z-50 flex flex-col justify-between border-r border-[#201D64]/40 shadow-2xl transition-transform duration-300 ease-in-out ${
-            isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-          }`}
+          className={`fixed lg:sticky top-0 left-0 h-screen bg-[#171653] text-white z-50 flex flex-col justify-between border-r border-[#211D6B] transition-all duration-200 ${
+            isSidebarCollapsed ? 'w-20' : 'w-64'
+          } ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
         >
-          {/* SIDEBAR HEADER / BRAND LOCKUP */}
-          <div>
-            <div className="p-5 border-b border-[#201D64]/80 flex items-center justify-between">
-              <div className="flex items-center gap-3">
+          {/* Brand Lockup using Official Logo without distortion */}
+          <div className="flex flex-col min-h-0 flex-1">
+            <div className="h-16 px-4 border-b border-[#211D6B] flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
                 <img
                   src="/assets/aistudio/logofi_0606f38f.png"
-                  alt="DIT Validation Engine Logo"
-                  className="h-10 w-10 object-contain rounded-xl shadow-md bg-[#201D64]/80 p-0.5 border border-[#5D94D9]/30"
+                  alt="iData Engine Official Logo"
+                  referrerPolicy="no-referrer"
+                  className="h-9 w-9 object-contain rounded-lg bg-[#211D6B] p-0.5 shrink-0"
                 />
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-base font-extrabold tracking-tight text-white leading-none">
+                {!isSidebarCollapsed && (
+                  <div className="min-w-0">
+                    <div className="text-sm font-bold text-white tracking-tight truncate">
                       iData Engine
-                    </span>
-                    <span className="text-[10px] font-mono font-bold bg-[#5D94D9] text-[#17154F] px-1.5 py-0.2 rounded leading-tight">
-                      v2.4
-                    </span>
+                    </div>
+                    <div className="text-[11px] text-[#28B8D5] font-medium truncate">
+                      Enterprise Data Quality
+                    </div>
                   </div>
-                  <p className="text-[10px] text-[#5D94D9] font-medium tracking-wide">
-                    TASK 07 · Data Quality Track
-                  </p>
-                </div>
+                )}
               </div>
 
-              {/* Mobile Close Button */}
               <button
-                onClick={() => setIsMobileSidebarOpen(false)}
-                className="lg:hidden text-slate-300 hover:text-white p-1 rounded-lg hover:bg-[#201D64]"
+                type="button"
+                onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                className="hidden lg:inline-flex p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-[#211D6B] transition-colors shrink-0"
+                aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
               >
-                <X className="w-5 h-5" />
+                {isSidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsMobileSidebarOpen(false)}
+                className="lg:hidden p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-[#211D6B]"
+                aria-label="Close sidebar"
+              >
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* NAVIGATION MENU */}
-            <nav className="p-4 space-y-6 overflow-y-auto max-h-[calc(100vh-190px)]">
-              {/* Section 1: Core Navigation */}
-              <div className="space-y-1">
-                <span className="px-3 text-[10px] font-bold uppercase tracking-wider text-[#5D94D9]/80 block mb-2">
-                  Validation Pipeline
-                </span>
-
-                <button
-                  onClick={() => { setActiveNav('dashboard'); setIsMobileSidebarOpen(false); }}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-colors ${
-                    activeNav === 'dashboard'
-                      ? 'bg-[#201D64] text-white shadow-sm border border-[#5D94D9]/30'
-                      : 'text-slate-300 hover:text-white hover:bg-[#201D64]/50'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Database className="w-4 h-4 text-[#5D94D9]" />
-                    <span>CSV Engine Studio</span>
-                  </div>
-                  <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-                </button>
-
-                <button
-                  onClick={() => { setShowDataDictionaryModal(true); setIsMobileSidebarOpen(false); }}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-[#201D64]/50 transition-colors"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <BookOpen className="w-4 h-4 text-[#5D94D9]" />
-                    <span>Schema Taxonomy</span>
-                  </div>
-                  <span className="text-[10px] bg-[#201D64] text-[#5D94D9] px-1.5 py-0.5 rounded font-mono">
-                    Dict
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => { setShowDeliverablesModal(true); setIsMobileSidebarOpen(false); }}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-[#201D64]/50 transition-colors"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <PackageCheck className="w-4 h-4 text-[#5D94D9]" />
-                    <span>5 Deliverables Audit</span>
-                  </div>
-                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.5 rounded font-mono">
-                    Ready
-                  </span>
-                </button>
-
-                {/* 10 Mandatory Tests Button */}
-                <button
-                  onClick={() => { setShowTestSuiteModal(true); if (!testOutput) handleRunTests(); setIsMobileSidebarOpen(false); }}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-[#201D64]/50 transition-colors"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>10 Mandatory Tests</span>
-                  </div>
-                  <span className="text-[10px] font-mono text-emerald-300 font-bold bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-700/60">
-                    10/10 OK
-                  </span>
-                </button>
-              </div>
-
-              {/* Section 2: Universal Multi-Domain Presets */}
-              <div className="space-y-1">
-                <span className="px-3 text-[10px] font-bold uppercase tracking-wider text-[#5D94D9]/80 block mb-2">
-                  Benchmark Domains
-                </span>
-
-                <div className="space-y-1">
-                  {samplePresets.map(preset => {
-                    const isSelected = inputMode === 'sample' && selectedSampleId === preset.id;
+            {/* Organized 5-Section Sidebar Navigation */}
+            <nav className="p-3 space-y-5 overflow-y-auto flex-1">
+              {sidebarGroups.map((sec) => (
+                <div key={sec.group} className="space-y-1">
+                  {!isSidebarCollapsed && (
+                    <div className="px-3 text-[10px] font-bold uppercase tracking-wider text-[#28B8D5]/80 mb-1.5">
+                      {sec.group}
+                    </div>
+                  )}
+                  {sec.items.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = activePage === item.id;
                     return (
                       <button
-                        key={preset.id}
+                        key={item.id}
+                        type="button"
                         onClick={() => {
-                          loadSamplePreset(preset.id);
+                          setActivePage(item.id);
                           setIsMobileSidebarOpen(false);
                         }}
-                        className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs transition-colors ${
-                          isSelected
-                            ? 'bg-[#5D94D9]/20 text-white font-bold border-l-2 border-[#5D94D9]'
-                            : 'text-slate-300 hover:text-white hover:bg-[#201D64]/40'
-                        }`}
+                        title={isSidebarCollapsed ? item.label : undefined}
+                        className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                          isActive
+                            ? 'bg-[#3659B8] text-white'
+                            : 'text-slate-300 hover:text-white hover:bg-[#211D6B]'
+                        } ${isSidebarCollapsed ? 'justify-center' : ''}`}
                       >
-                        <div className="flex items-center gap-2 truncate">
-                          {getDomainIcon(preset.id.toUpperCase())}
-                          <span className="truncate">{preset.name}</span>
-                        </div>
-                        <span className="text-[10px] font-mono text-[#5D94D9] shrink-0">
-                          {preset.recordCount}r
-                        </span>
+                        <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-[#28B8D5]'}`} />
+                        {!isSidebarCollapsed && <span className="truncate">{item.label}</span>}
                       </button>
                     );
                   })}
                 </div>
-              </div>
+              ))}
             </nav>
           </div>
 
-          {/* SIDEBAR FOOTER: CLEAN SYSTEM READINESS STATUS */}
-          <div className="p-3.5 border-t border-[#201D64]/80 bg-[#141243]">
-            <div className="flex items-center gap-2.5 p-2 rounded-xl bg-[#201D64]/50 border border-[#5D94D9]/20">
-              <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-              <div className="overflow-hidden text-[11px]">
-                <div className="font-bold text-white truncate">Validation Engine Ready</div>
-                <div className="text-[10px] text-[#5D94D9] truncate">Python 3.10 Native · Task 07</div>
-              </div>
+          {/* Simple Green Status Indicator (Hides Internal Test Details) */}
+          <div className="p-3 border-t border-[#211D6B] shrink-0">
+            <div
+              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-[#211D6B]/70 ${
+                isSidebarCollapsed ? 'justify-center' : ''
+              }`}
+              title="Validation Engine Operational"
+            >
+              <span
+                className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                  engineHealthy ? 'bg-[#10B981]' : 'bg-[#F59E0B]'
+                }`}
+              />
+              {!isSidebarCollapsed && (
+                <span className="text-xs font-semibold text-white truncate">
+                  Validation Engine Operational
+                </span>
+              )}
             </div>
           </div>
         </aside>
 
-        {/* ----------------------------------------------------------------------- */}
-        {/* MAIN APPLICATION CANVAS                                                 */}
-        {/* ----------------------------------------------------------------------- */}
+        {/* Main Content Canvas */}
         <div className="flex-1 flex flex-col min-w-0">
-
-          {/* TOP NAVBAR (WHITE #FFFFFF WITH #DCE4F2 BORDER - CLEAN, NO LOGINS) */}
-          <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-[#DCE4F2] px-4 sm:px-6 py-2.5 flex items-center justify-between gap-4">
-            {/* Left: Mobile Hamburger & Current Document */}
-            <div className="flex items-center gap-3">
+          {/* Enterprise Header */}
+          <header className="sticky top-0 z-30 bg-white border-b border-[#E2E8F0] px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+            {/* Left: Mobile Trigger + Active Dataset, Domain & Processing Status */}
+            <div className="flex items-center gap-3 min-w-0">
               <button
+                type="button"
                 onClick={() => setIsMobileSidebarOpen(true)}
-                className="lg:hidden p-2 rounded-xl text-[#201D64] hover:bg-[#EAF2FC] transition-colors"
-                aria-label="Open sidebar menu"
+                className="lg:hidden p-2 rounded-lg text-[#172554] hover:bg-[#F5F7FC]"
+                aria-label="Open navigation menu"
               >
                 <Menu className="w-5 h-5" />
               </button>
 
-              {/* Logo in top navbar on mobile & tablet */}
-              <div className="flex items-center gap-2 lg:hidden">
-                <img
-                  src="/assets/aistudio/logofi_0606f38f.png"
-                  alt="DIT Logo"
-                  className="h-8 w-8 object-contain rounded-lg bg-[#17154F] p-0.5"
-                />
-                <span className="font-bold text-[#17154F] text-sm">iData Engine</span>
-              </div>
-
-              {/* Dataset Status Chip (Desktop) */}
-              <div className="hidden sm:flex items-center gap-2 pl-2">
-                <span className="text-xs font-semibold text-[#68738A]">Active Dataset:</span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#EAF2FC] text-[#201D64] font-mono text-xs font-medium border border-[#DCE4F2]">
-                  <FileText className="w-3.5 h-3.5 text-[#5D94D9]" />
-                  <span className="max-w-[200px] truncate">{fileName}</span>
-                </span>
-                {profile && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-mono text-[11px] font-semibold border border-emerald-200">
-                    <Check className="w-3 h-3 text-emerald-600" />
-                    {profile.domain_title}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs min-w-0">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-[#64748B] font-medium hidden sm:inline">Active Dataset:</span>
+                  <span className="font-mono font-bold text-[#172554] truncate max-w-[180px]">
+                    {fileName}
                   </span>
+                </div>
+
+                {profile && (
+                  <>
+                    <span className="text-[#E2E8F0] hidden md:inline">|</span>
+                    <div className="hidden md:flex items-center gap-1.5 text-[#64748B]">
+                      <span>Domain:</span>
+                      <span className="font-semibold text-[#3659B8]">{profile.domain_title}</span>
+                    </div>
+                  </>
                 )}
+
+                <span className="text-[#E2E8F0] hidden xl:inline">|</span>
+                <div className="hidden xl:flex items-center gap-2">
+                  <span className="text-[#64748B]">Status:</span>
+                  <span className="font-semibold text-[#172554]">{processingStatus}</span>
+                  <span className="text-[#E2E8F0]">·</span>
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-[#10B981]">
+                    <span className="w-2 h-2 rounded-full bg-[#10B981]" />
+                    Validation Engine Operational
+                  </span>
+                </div>
               </div>
             </div>
 
-            {/* Right: Quick Actions, 10 Mandatory Tests, & Export */}
-            <div className="flex items-center gap-2.5">
-              {/* 10 Mandatory Tests Status Button */}
-              <button
-                onClick={() => {
-                  setShowTestSuiteModal(true);
-                  if (!testOutput) handleRunTests();
-                }}
-                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 transition-colors"
-                title="Inspect 10 Mandatory Test Cases (TC-01 to TC-10)"
-              >
-                <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                <span>10/10 Mandatory Tests Pass</span>
-              </button>
+            {/* Right: Notifications, User Profile & Export Options */}
+            <div className="flex items-center gap-2 shrink-0 relative">
+              {/* Notifications Popover */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowNotificationsMenu(!showNotificationsMenu);
+                    setShowExportMenu(false);
+                    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+                  }}
+                  className="p-2 rounded-lg border border-[#E2E8F0] text-[#172554] hover:bg-[#F5F7FC] transition-colors relative"
+                  aria-label="Notifications"
+                >
+                  <Bell className="w-4 h-4" />
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#EF4444] text-white text-[10px] font-bold flex items-center justify-center">
+                      {unreadCount}
+                    </span>
+                  )}
+                </button>
 
-              {/* Data Dictionary Trigger */}
-              <button
-                onClick={() => setShowDataDictionaryModal(true)}
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#F5F7FC] hover:bg-[#EAF2FC] border border-[#DCE4F2] text-[#201D64] transition-colors"
-              >
-                <BookOpen className="w-3.5 h-3.5 text-[#5D94D9]" />
-                <span>Taxonomy</span>
-              </button>
+                {showNotificationsMenu && (
+                  <div className="absolute right-0 mt-2 w-80 bg-white border border-[#E2E8F0] rounded-xl shadow-xl p-3 space-y-2 z-40">
+                    <div className="flex items-center justify-between pb-2 border-b border-[#E2E8F0]">
+                      <span className="text-xs font-bold text-[#172554]">Activity Notifications</span>
+                      <button
+                        type="button"
+                        onClick={() => setNotifications([])}
+                        className="text-[11px] text-[#3659B8] font-semibold hover:underline"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    {notifications.length === 0 ? (
+                      <p className="text-xs text-[#64748B] py-4 text-center">
+                        No recent notifications.
+                      </p>
+                    ) : (
+                      <div className="max-h-64 overflow-y-auto divide-y divide-[#E2E8F0]">
+                        {notifications.map((n) => (
+                          <div key={n.id} className="py-2 text-xs space-y-0.5">
+                            <div className="font-semibold text-[#172554]">{n.title}</div>
+                            <div className="text-[#64748B]">{n.message}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
 
-              {/* Deliverables Trigger */}
-              <button
-                onClick={() => setShowDeliverablesModal(true)}
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#F5F7FC] hover:bg-[#EAF2FC] border border-[#DCE4F2] text-[#201D64] transition-colors"
-              >
-                <PackageCheck className="w-3.5 h-3.5 text-[#5D94D9]" />
-                <span>Deliverables</span>
-              </button>
+              {/* Export Options Menu */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExportMenu(!showExportMenu);
+                    setShowNotificationsMenu(false);
+                  }}
+                  className="h-9 px-3.5 bg-[#171653] hover:bg-[#211D6B] text-white text-xs font-bold rounded-lg flex items-center gap-2 whitespace-nowrap shrink-0"
+                >
+                  <Download className="w-3.5 h-3.5 text-[#28B8D5]" />
+                  <span className="hidden sm:inline">Export Options</span>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
 
-              {/* Export Clean CSV Primary Button */}
-              <button
-                onClick={() => downloadCSV(cleanRecords, 'cleaned_dataset.csv')}
-                disabled={cleanRecords.length === 0}
-                className="h-8 sm:h-9 flex items-center gap-2 px-3 sm:px-4 text-xs font-bold text-white bg-[#201D64] hover:bg-[#17154F] active:bg-[#12103f] rounded-lg shadow-sm transition-all disabled:opacity-40"
-              >
-                <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                <span className="hidden sm:inline">Export Clean CSV</span>
-                <span className="sm:hidden">Export</span>
-              </button>
+                {showExportMenu && (
+                  <div className="absolute right-0 mt-2 w-64 bg-white border border-[#E2E8F0] rounded-xl shadow-xl p-2 space-y-1 z-40 text-xs">
+                    <button
+                      type="button"
+                      disabled={cleanRecords.length === 0}
+                      onClick={() => {
+                        downloadCSV(cleanRecords, 'cleaned_dataset.csv', 'CSV_CLEAN');
+                        setShowExportMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#F5F7FC] font-semibold text-[#172554] disabled:opacity-40"
+                    >
+                      Export Clean Dataset (.csv)
+                    </button>
+                    <button
+                      type="button"
+                      disabled={exceptions.length === 0}
+                      onClick={() => {
+                        downloadCSV(exceptions, 'exception_register.csv', 'CSV_EXCEPTIONS');
+                        setShowExportMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#F5F7FC] font-semibold text-[#EF4444] disabled:opacity-40"
+                    >
+                      Export Exception Register (.csv)
+                    </button>
+                    <div className="border-t border-[#E2E8F0] my-1" />
+                    <button
+                      type="button"
+                      disabled={!comparisonSnapshot}
+                      onClick={() => {
+                        handleDownloadPDFReport();
+                        setShowExportMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#F5F7FC] font-semibold text-[#172554] disabled:opacity-40"
+                    >
+                      Download Quality Report (.pdf)
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!comparisonSnapshot}
+                      onClick={() => {
+                        handleDownloadExcelReport();
+                        setShowExportMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-[#F5F7FC] font-semibold text-[#10B981] disabled:opacity-40"
+                    >
+                      Download Quality Report (.xlsx)
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </header>
 
-          {/* MAIN WORKSPACE CONTENT */}
-          <main className="flex-1 p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto w-full">
+          {/* Main Workspace Router */}
+          <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
+            {activePage === 'dashboard' && (
+              <DashboardView
+                runs={runs}
+                reports={reports}
+                audits={audits}
+                activeFileName={fileName}
+                activeProfile={profile}
+                onNavigateStudio={() => setActivePage('studio')}
+                onRunActivePipeline={handleExecutePipeline}
+                isValidating={isValidating}
+              />
+            )}
 
-            {/* HERO INTRODUCTION BANNER */}
-            <div className="bg-gradient-to-r from-[#17154F] via-[#201D64] to-[#17154F] rounded-2xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden border border-[#5D94D9]/20">
-              <div className="absolute right-0 top-0 bottom-0 w-1/3 opacity-10 pointer-events-none flex items-center justify-end pr-8">
-                <img
-                  src="/assets/aistudio/logofi_0606f38f.png"
-                  alt="Background Logo Motif"
-                  className="h-64 w-64 object-contain"
-                />
-              </div>
-
-              <div className="relative z-10 max-w-2xl space-y-3">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#5D94D9]/20 border border-[#5D94D9]/40 text-[#5D94D9] text-xs font-mono font-semibold">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>DIT Internship 2026 · TASK 07 Milestone Delivery</span>
-                </div>
-
-                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white leading-tight">
-                  Universal Intelligent CSV Data Cleaning &amp; Validation Engine
-                </h1>
-
-                <p className="text-sm text-slate-300 leading-relaxed font-normal">
-                  Zero fixed column constraints. Automatically infers schemas, preserves leading zeros for Student and Postal IDs, enforces domain-specific invariants, isolates quarantined anomalies, and exports compliant clean datasets.
-                </p>
-
-                <div className="flex flex-wrap items-center gap-3 pt-2 text-xs font-medium text-slate-300">
-                  <div className="flex items-center gap-1.5 bg-[#201D64]/80 px-2.5 py-1 rounded-lg border border-[#5D94D9]/30">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Pure Python 3.10 Native</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 bg-[#201D64]/80 px-2.5 py-1 rounded-lg border border-[#5D94D9]/30">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Leading Zeros Preserved</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 bg-[#201D64]/80 px-2.5 py-1 rounded-lg border border-[#5D94D9]/30">
-                    <Activity className="w-3.5 h-3.5 text-[#5D94D9]" />
-                    <span>10/10 Mandatory Tests Passing</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* STEP 1: UPLOAD ANY CSV OR TEST BENCHMARK DATASET */}
-            <section className="bg-white border border-[#DCE4F2] rounded-2xl p-6 shadow-sm space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#DCE4F2]">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-xl bg-[#EAF2FC] text-[#201D64] flex items-center justify-center font-mono text-sm font-bold border border-[#DCE4F2]">
-                    1
-                  </div>
-                  <div>
-                    <h2 className="text-base font-bold text-[#201D64]">
-                      Ingest Any CSV File or Pick a Benchmark Dataset
-                    </h2>
-                    <p className="text-xs text-[#68738A]">
-                      No fixed columns or schemas required. Handles Student, Employee, Product, E-Commerce, and Healthcare files.
+            {activePage === 'studio' && (
+              <div className="space-y-6">
+                {/* Studio Hero Header */}
+                <div className="bg-[#171653] rounded-xl p-6 text-white flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="space-y-2 max-w-2xl">
+                    <h1 className="text-2xl font-bold tracking-tight text-white">
+                      CSV &amp; Excel Data Cleaning &amp; Validation Studio
+                    </h1>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      Zero fixed column constraints. Automatically infers schemas, preserves leading zeros, enforces domain invariants, quarantines anomalies separately, and prepares audited Before &amp; After Quality Reports.
                     </p>
                   </div>
-                </div>
-
-                {/* Upload & Paste Toggles */}
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className={`h-9 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                      inputMode === 'upload'
-                        ? 'bg-[#201D64] text-white shadow-sm'
-                        : 'bg-[#F5F7FC] text-[#201D64] hover:bg-[#EAF2FC] border border-[#DCE4F2]'
-                    }`}
-                  >
-                    <Upload className="w-3.5 h-3.5 text-[#5D94D9]" />
-                    <span>Upload CSV</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setInputMode('paste')}
-                    className={`h-9 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                      inputMode === 'paste'
-                        ? 'bg-[#201D64] text-white shadow-sm'
-                        : 'bg-[#F5F7FC] text-[#201D64] hover:bg-[#EAF2FC] border border-[#DCE4F2]'
-                    }`}
-                  >
-                    <FileText className="w-3.5 h-3.5 text-[#5D94D9]" />
-                    <span>Paste CSV</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Domain Benchmark Dataset Cards */}
-              <div className="space-y-2">
-                <span className="text-xs font-bold text-[#201D64] block">
-                  Select a Domain Benchmark Dataset to Test:
-                </span>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                  {samplePresets.map(preset => {
-                    const isSelected = inputMode === 'sample' && selectedSampleId === preset.id;
-                    return (
-                      <button
-                        key={preset.id}
-                        onClick={() => loadSamplePreset(preset.id)}
-                        className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between ${
-                          isSelected
-                            ? 'bg-[#EAF2FC] border-[#5D94D9] ring-2 ring-[#5D94D9]/20 shadow-sm'
-                            : 'bg-[#F5F7FC] hover:bg-white border-[#DCE4F2] text-[#68738A] hover:text-[#201D64]'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between w-full mb-1.5">
-                          <span className="text-xs font-bold text-[#201D64] truncate">
-                            {preset.name}
-                          </span>
-                          {getDomainIcon(preset.id.toUpperCase())}
-                        </div>
-                        <span className="text-[11px] text-[#68738A] truncate block">
-                          {preset.description.split('·')[0]}
-                        </span>
-                        <div className="mt-2 text-[10px] font-mono font-semibold text-[#5D94D9]">
-                          {preset.recordCount} records
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Hidden File Input */}
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileUpload}
-                accept=".csv,text/csv"
-                className="hidden"
-              />
-
-              {/* Dropzone or Paste Mode */}
-              {inputMode !== 'paste' ? (
-                <div
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setIsDragOver(true);
-                  }}
-                  onDragLeave={() => setIsDragOver(false)}
-                  onDrop={handleDrop}
-                  onClick={() => fileInputRef.current?.click()}
-                  className={`p-6 border-2 border-dashed rounded-2xl text-center cursor-pointer transition-all ${
-                    isDragOver
-                      ? 'border-[#5D94D9] bg-[#EAF2FC]'
-                      : inputMode === 'upload'
-                      ? 'border-[#5D94D9] bg-[#F5F7FC]'
-                      : 'border-[#DCE4F2] hover:border-[#5D94D9] bg-[#F5F7FC]/70'
-                  }`}
-                >
-                  <div className="w-12 h-12 rounded-2xl bg-white text-[#201D64] flex items-center justify-center mx-auto mb-2 shadow-sm border border-[#DCE4F2]">
-                    <Upload className="w-6 h-6 text-[#5D94D9]" />
+                  <div className="flex items-center gap-2 text-xs font-semibold text-[#10B981] shrink-0">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#10B981]" />
+                    <span>Validation Engine Operational</span>
                   </div>
-
-                  <div className="text-sm font-bold text-[#201D64]">
-                    {inputMode === 'upload' ? (
-                      <span className="text-[#201D64] flex items-center justify-center gap-2">
-                        <FileCheck className="w-4 h-4 text-emerald-600" /> Loaded: {fileName}
-                      </span>
-                    ) : (
-                      <span>Drag &amp; drop any CSV file here, or click to browse</span>
-                    )}
-                  </div>
-
-                  <p className="text-xs text-[#68738A] mt-1 max-w-md mx-auto">
-                    Currently selected: <span className="font-mono font-semibold text-[#201D64]">{fileName}</span>
-                  </p>
                 </div>
-              ) : (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs text-[#68738A]">
-                    <span>Paste raw comma-separated values (with header row):</span>
-                    <button
-                      onClick={() => setInputMode('sample')}
-                      className="text-[#68738A] hover:text-[#201D64] flex items-center gap-1 font-semibold"
-                    >
-                      <X className="w-3.5 h-3.5" /> Cancel
-                    </button>
-                  </div>
-                  <textarea
-                    value={csvContent}
-                    onChange={(e) => {
-                      setCsvContent(e.target.value);
-                      analyzeDataset(e.target.value);
-                    }}
-                    placeholder="reg_no,student_name,email,department,year,phone_number&#10;00101,  arun kumar  ,arun@university.edu,Computer Science,3,+91-9876543210"
-                    rows={6}
-                    className="w-full bg-[#F5F7FC] border border-[#DCE4F2] rounded-xl p-3 font-mono text-xs text-[#201D64] focus:outline-none focus:border-[#5D94D9] focus:bg-white leading-relaxed"
-                    spellCheck={false}
-                  />
-                </div>
-              )}
-            </section>
 
-            {/* STEP 2: INTELLIGENT DATASET PROFILING & DOMAIN INFERENCE */}
-            {profile && (
-              <section className="bg-white border border-[#DCE4F2] rounded-2xl p-6 shadow-sm space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#DCE4F2]">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-xl bg-[#EAF2FC] text-[#201D64] flex items-center justify-center font-mono text-sm font-bold border border-[#DCE4F2]">
-                      2
-                    </div>
+                {/* Step 1: Strict CSV / Excel Upload or Benchmark Dataset */}
+                <section className="bg-white border border-[#E2E8F0] rounded-xl p-6 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#E2E8F0]">
                     <div>
-                      <h2 className="text-base font-bold text-[#201D64] flex items-center gap-2">
-                        <span>Intelligent Profiling &amp; Domain Detection</span>
-                        <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
-                          {profile.domain_confidence_pct}% Match
-                        </span>
+                      <h2 className="text-base font-bold text-[#172554]">
+                        1. Ingest CSV / Excel File or Select Benchmark Dataset
                       </h2>
-                      <p className="text-xs text-[#68738A]">
-                        Dynamic schema analysis, primary key isolation, and data quality scoring
+                      <p className="text-xs text-[#64748B] mt-0.5">
+                        Accepted formats: <span className="font-mono font-semibold text-[#172554]">.csv, .xlsx, .xls</span> · Max size: {settings.maxUploadMb} MB
                       </p>
                     </div>
-                  </div>
 
-                  <div className="flex items-center gap-2">
-                    <div className="px-3.5 py-1.5 bg-[#EAF2FC] border border-[#DCE4F2] rounded-xl text-xs font-bold text-[#201D64] flex items-center gap-2 shadow-xs">
-                      {getDomainIcon(profile.domain_key)}
-                      <span>Inferred Domain: {profile.domain_title}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Profile Stats Cards */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                  <div className="p-4 bg-[#F5F7FC] border border-[#DCE4F2] rounded-xl space-y-1">
-                    <span className="text-[#68738A] block text-[11px] font-semibold">Dimensions</span>
-                    <span className="font-mono text-xl font-extrabold text-[#201D64]">
-                      {profile.total_rows} <span className="text-xs font-normal text-[#68738A]">rows ×</span> {profile.total_columns} <span className="text-xs font-normal text-[#68738A]">cols</span>
-                    </span>
-                  </div>
-
-                  <div className="p-4 bg-[#F5F7FC] border border-[#DCE4F2] rounded-xl space-y-1">
-                    <span className="text-[#68738A] block text-[11px] font-semibold">Primary Key Inferred</span>
-                    <span className="font-mono text-base font-extrabold text-[#201D64] truncate block">
-                      {profile.primary_identifier || 'None Detected'}
-                    </span>
-                  </div>
-
-                  <div className="p-4 bg-[#F5F7FC] border border-[#DCE4F2] rounded-xl space-y-1">
-                    <span className="text-[#68738A] block text-[11px] font-semibold">Missing Cells</span>
-                    <span className="font-mono text-xl font-extrabold text-amber-600">
-                      {profile.total_missing_cells} <span className="text-xs font-normal text-[#68738A]">({profile.missing_cells_percentage}%)</span>
-                    </span>
-                  </div>
-
-                  <div className="p-4 bg-[#F5F7FC] border border-[#DCE4F2] rounded-xl space-y-1">
-                    <span className="text-[#68738A] block text-[11px] font-semibold">Data Quality Score</span>
-                    <span className="font-mono text-xl font-extrabold text-[#5D94D9]">
-                      {profile.data_quality_score} <span className="text-xs font-normal text-[#68738A]">/ 100</span>
-                    </span>
-                  </div>
-                </div>
-
-                {/* Column Taxonomy Inferred */}
-                <div className="space-y-2">
-                  <span className="text-xs font-bold text-[#201D64] block">
-                    Detected Column Taxonomy &amp; Semantic Typing:
-                  </span>
-                  <div className="overflow-x-auto border border-[#DCE4F2] rounded-xl shadow-xs">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead className="bg-[#EAF2FC] text-[#201D64] font-mono text-[11px] border-b border-[#DCE4F2]">
-                        <tr>
-                          <th className="py-2.5 px-3 font-bold">Column</th>
-                          <th className="py-2.5 px-3 font-bold">Physical Type</th>
-                          <th className="py-2.5 px-3 font-bold">Semantic Role</th>
-                          <th className="py-2.5 px-3 font-bold">Key Status</th>
-                          <th className="py-2.5 px-3 font-bold">Missing Values</th>
-                          <th className="py-2.5 px-3 font-bold">Uniqueness</th>
-                          <th className="py-2.5 px-3 font-bold">Sample Value</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[#DCE4F2] font-mono text-[11px] bg-white">
-                        {profile.columns.map((c, idx) => (
-                          <tr key={idx} className="hover:bg-[#F5F7FC] text-[#201D64] transition-colors">
-                            <td className="py-2 px-3 font-bold text-[#201D64]">{c.column_name}</td>
-                            <td className="py-2 px-3 text-[#68738A]">{c.physical_type}</td>
-                            <td className="py-2 px-3 text-[#5D94D9] font-bold">{c.semantic_type}</td>
-                            <td className="py-2 px-3">
-                              {c.is_potential_identifier ? (
-                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold border border-emerald-300">
-                                  Primary ID Key
-                                </span>
-                              ) : (
-                                <span className="text-[#68738A]">—</span>
-                              )}
-                            </td>
-                            <td className="py-2 px-3">
-                              {c.missing_count > 0 ? (
-                                <span className="text-amber-600 font-bold">{c.missing_count} ({c.missing_percentage}%)</span>
-                              ) : (
-                                <span className="text-emerald-600 font-semibold">0%</span>
-                              )}
-                            </td>
-                            <td className="py-2 px-3">{c.unique_percentage}%</td>
-                            <td className="py-2 px-3 text-[#68738A] max-w-[150px] truncate">
-                              {c.sample_values[0] || 'NULL'}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {/* STEP 3: DYNAMIC CLEANING & VALIDATION RECOMMENDATIONS */}
-            {recommendations.length > 0 && (
-              <section className="bg-white border border-[#DCE4F2] rounded-2xl p-6 shadow-sm space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#DCE4F2]">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-xl bg-[#EAF2FC] text-[#201D64] flex items-center justify-center font-mono text-sm font-bold border border-[#DCE4F2]">
-                      3
-                    </div>
-                    <div>
-                      <h2 className="text-base font-bold text-[#201D64]">
-                        Dynamic Domain-Based Cleaning Recommendations
-                      </h2>
-                      <p className="text-xs text-[#68738A]">
-                        Toggle specific operations before executing the Python validation pipeline
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const allTrue: Record<string, boolean> = {};
-                        recommendations.forEach(r => allTrue[r.id] = true);
-                        setEnabledRuleMap(allTrue);
-                      }}
-                      className="px-3 py-1.5 text-xs font-bold rounded-lg bg-[#EAF2FC] hover:bg-[#dbe9fa] text-[#201D64] border border-[#DCE4F2] transition-colors"
-                    >
-                      Enable All
-                    </button>
-                  </div>
-                </div>
-
-                {/* Recommendations Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs">
-                  {recommendations.map(rec => {
-                    const isEnabled = enabledRuleMap[rec.id] ?? rec.enabled;
-                    return (
-                      <div
-                        key={rec.id}
-                        onClick={() => toggleRecommendation(rec.id)}
-                        className={`p-4 rounded-xl border transition-all cursor-pointer flex flex-col justify-between space-y-2.5 ${
-                          isEnabled
-                            ? 'bg-[#F5F7FC] border-[#5D94D9] ring-1 ring-[#5D94D9]/20'
-                            : 'bg-white border-[#DCE4F2] text-[#68738A] opacity-60'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2.5">
-                            {isEnabled ? (
-                              <CheckSquare className="w-4 h-4 text-[#201D64] shrink-0" />
-                            ) : (
-                              <Square className="w-4 h-4 text-[#68738A] shrink-0" />
-                            )}
-                            <span className="font-bold text-[#201D64] text-xs">{rec.name}</span>
-                          </div>
-                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
-                            rec.severity === 'CRITICAL'
-                              ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                              : 'bg-[#EAF2FC] text-[#201D64] border border-[#DCE4F2]'
-                          }`}>
-                            {rec.category}
-                          </span>
-                        </div>
-
-                        <p className="text-[11px] text-[#68738A] leading-snug">
-                          {rec.description}
-                        </p>
-
-                        {/* Before & After Value Preview */}
-                        <div className="bg-white p-2.5 rounded-lg border border-[#DCE4F2] font-mono text-[11px] flex items-center justify-between text-[#68738A]">
-                          <div>
-                            <span className="text-[#68738A] text-[10px] uppercase font-bold">Before: </span>
-                            <span className="text-rose-600 font-semibold">{rec.preview.before}</span>
-                          </div>
-                          <ArrowRight className="w-3.5 h-3.5 text-[#5D94D9] shrink-0 mx-2" />
-                          <div>
-                            <span className="text-[#68738A] text-[10px] uppercase font-bold">After: </span>
-                            <span className="text-emerald-600 font-bold">{rec.preview.after}</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Pipeline Execution Bar */}
-                <div className="pt-4 border-t border-[#DCE4F2] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setShowLogs(!showLogs)}
-                      className="h-9 flex items-center gap-1.5 px-3.5 rounded-xl bg-[#F5F7FC] hover:bg-[#EAF2FC] border border-[#DCE4F2] text-xs text-[#201D64] font-mono font-semibold transition-colors"
-                    >
-                      <Terminal className="w-3.5 h-3.5 text-[#5D94D9]" />
-                      <span>{showLogs ? 'Hide Engine Terminal' : 'Show Engine Terminal'}</span>
-                    </button>
-                    <span className="text-xs text-[#68738A] hidden lg:inline">
-                      Preserves leading zeros · Zero pip dependencies · Standard library runtime
-                    </span>
-                  </div>
-
-                  <button
-                    onClick={handleExecutePipeline}
-                    disabled={isValidating}
-                    className="h-11 px-7 bg-[#201D64] hover:bg-[#17154F] active:bg-[#12103f] text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-[#201D64]/20 flex items-center justify-center gap-2.5 disabled:opacity-50"
-                  >
-                    {isValidating ? (
-                      <RotateCw className="w-4 h-4 animate-spin text-[#5D94D9]" />
-                    ) : (
-                      <Play className="w-4 h-4 fill-current text-[#5D94D9]" />
-                    )}
-                    <span>{isValidating ? 'Executing Pipeline...' : 'Run Dynamic Cleaning & Validation'}</span>
-                  </button>
-                </div>
-
-                {/* Live Python Terminal Logs */}
-                {showLogs && (
-                  <div className="mt-4 p-4 bg-[#17154F] text-emerald-400 rounded-xl border border-[#201D64] font-mono text-xs whitespace-pre-wrap leading-relaxed max-h-56 overflow-y-auto shadow-inner">
-                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#201D64] text-slate-300 text-[11px]">
-                      <span className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                        <span className="font-bold">Python Engine stdout (Native 3.10)</span>
-                      </span>
-                      <span className="text-[#5D94D9]">universal_engine.py</span>
-                    </div>
-                    {engineLogs || '[WAITING] Ready to execute dynamic cleaning rules...'}
-                  </div>
-                )}
-              </section>
-            )}
-
-            {/* STEP 4 & 5: RESULTS SCORECARD & DUAL DELIVERABLE TABLES */}
-            {summary && (
-              <section className="space-y-4">
-                {/* Executive Metrics Scorecard */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                  <div className="p-5 bg-white border border-[#DCE4F2] rounded-2xl flex flex-col justify-between h-32 shadow-sm">
-                    <span className="text-xs font-bold text-[#68738A]">Total Ingested Volume</span>
-                    <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-3xl font-extrabold text-[#201D64] tabular-nums">
-                        {summary.total_records}
-                      </span>
-                      <span className="text-xs text-[#68738A] font-mono font-medium">records</span>
-                    </div>
-                    <div className="text-[11px] text-[#5D94D9] font-mono font-semibold truncate">
-                      Domain: {summary.domain_detected || 'Universal CSV'}
-                    </div>
-                  </div>
-
-                  <div className="p-5 bg-white border border-emerald-200 rounded-2xl flex flex-col justify-between h-32 shadow-sm relative overflow-hidden">
-                    <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-50 rounded-full blur-xl pointer-events-none" />
-                    <span className="text-xs font-bold text-emerald-800">Clean Warehouse Ready</span>
-                    <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-3xl font-extrabold text-emerald-700 tabular-nums">
-                        {summary.valid_records}
-                      </span>
-                      <span className="text-xs font-bold text-emerald-700 font-mono">
-                        ({summary.pass_rate_pct}%)
-                      </span>
-                    </div>
-                    <div className="text-[11px] text-emerald-700 font-mono font-semibold">
-                      Deliverable: cleaned_dataset.csv
-                    </div>
-                  </div>
-
-                  <div className="p-5 bg-white border border-rose-200 rounded-2xl flex flex-col justify-between h-32 shadow-sm relative overflow-hidden">
-                    <div className="absolute top-0 right-0 w-24 h-24 bg-rose-50 rounded-full blur-xl pointer-events-none" />
-                    <span className="text-xs font-bold text-rose-800">Quarantined Anomalies</span>
-                    <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-3xl font-extrabold text-rose-700 tabular-nums">
-                        {summary.quarantined_records}
-                      </span>
-                      <span className="text-xs font-bold text-rose-700 font-mono">
-                        ({summary.quarantine_rate_pct}%)
-                      </span>
-                    </div>
-                    <div className="text-[11px] text-rose-700 font-mono font-semibold">
-                      Deliverable: exception_register.csv
-                    </div>
-                  </div>
-
-                  <div className="p-5 bg-white border border-[#DCE4F2] rounded-2xl flex flex-col justify-between h-32 shadow-sm">
-                    <span className="text-xs font-bold text-[#68738A]">Pipeline Execution Speed</span>
-                    <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-3xl font-extrabold text-[#201D64] tabular-nums">
-                        {summary.execution_time_ms}
-                      </span>
-                      <span className="text-xs text-[#68738A] font-mono font-medium">ms</span>
-                    </div>
-                    <div className="text-[11px] text-[#68738A] font-mono">
-                      Pure Python Standard Library
-                    </div>
-                  </div>
-                </div>
-
-                {/* Partition Proportion Bar */}
-                <div className="p-4 bg-white border border-[#DCE4F2] rounded-2xl space-y-2 shadow-sm">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-[#201D64]">Dataset Partition Distribution:</span>
-                    <div className="flex items-center gap-4 text-xs font-mono font-bold">
-                      <span className="text-emerald-700 flex items-center gap-1.5">
-                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                        Clean Warehouse: {summary.valid_records} ({summary.pass_rate_pct}%)
-                      </span>
-                      <span className="text-rose-700 flex items-center gap-1.5">
-                        <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
-                        Quarantine Exceptions: {summary.quarantined_records} ({summary.quarantine_rate_pct}%)
-                      </span>
-                    </div>
-                  </div>
-                  <div className="w-full h-3 bg-[#F5F7FC] rounded-full overflow-hidden flex border border-[#DCE4F2]">
-                    <div
-                      style={{ width: `${summary.pass_rate_pct}%` }}
-                      className="bg-emerald-500 h-full transition-all duration-500"
-                      title={`Clean: ${summary.valid_records} records`}
-                    />
-                    <div
-                      style={{ width: `${summary.quarantine_rate_pct}%` }}
-                      className="bg-rose-500 h-full transition-all duration-500"
-                      title={`Quarantine: ${summary.quarantined_records} records`}
-                    />
-                  </div>
-                </div>
-
-                {/* DUAL TABLE WORKSPACE */}
-                <div className="border border-[#DCE4F2] bg-white rounded-2xl overflow-hidden shadow-sm">
-                  {/* Table Tab Switcher & Filter Bar */}
-                  <div className="p-4 border-b border-[#DCE4F2] flex flex-col md:flex-row md:items-center justify-between gap-4 bg-[#F5F7FC]/50">
-                    <div className="flex items-center gap-1.5 bg-[#EAF2FC] p-1 rounded-xl border border-[#DCE4F2] text-xs">
+                    <div className="flex items-center gap-2">
                       <button
-                        onClick={() => setOutputView('clean')}
-                        className={`h-9 px-4 rounded-lg font-bold transition-all flex items-center gap-2 ${
-                          outputView === 'clean'
-                            ? 'bg-[#201D64] text-white shadow-sm'
-                            : 'text-[#68738A] hover:text-[#201D64]'
-                        }`}
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="px-3.5 py-2 rounded-lg text-xs font-bold bg-[#171653] hover:bg-[#211D6B] text-white flex items-center gap-1.5 whitespace-nowrap"
                       >
-                        <ShieldCheck className="w-4 h-4 stroke-[2.5]" />
-                        <span>Clean Validated Dataset</span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
-                          outputView === 'clean' ? 'bg-white/20 text-white' : 'bg-white text-[#201D64]'
-                        }`}>
-                          {cleanRecords.length}
-                        </span>
+                        <Upload className="w-3.5 h-3.5 text-[#28B8D5]" />
+                        <span>Upload CSV / Excel</span>
                       </button>
 
                       <button
-                        onClick={() => setOutputView('exceptions')}
-                        className={`h-9 px-4 rounded-lg font-bold transition-all flex items-center gap-2 ${
-                          outputView === 'exceptions'
-                            ? 'bg-rose-600 text-white shadow-sm'
-                            : 'text-[#68738A] hover:text-[#201D64]'
-                        }`}
+                        type="button"
+                        onClick={() => setInputMode(inputMode === 'paste' ? 'sample' : 'paste')}
+                        className="px-3.5 py-2 rounded-lg text-xs font-bold bg-[#F5F7FC] hover:bg-[#E2E8F0]/60 text-[#172554] border border-[#E2E8F0] flex items-center gap-1.5 whitespace-nowrap"
                       >
-                        <AlertTriangle className="w-4 h-4 stroke-[2.5]" />
-                        <span>Exception Register</span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
-                          outputView === 'exceptions' ? 'bg-white/20 text-white' : 'bg-white text-rose-600'
-                        }`}>
-                          {exceptions.length}
-                        </span>
+                        <FileText className="w-3.5 h-3.5 text-[#3659B8]" />
+                        <span>{inputMode === 'paste' ? 'Use Dropzone' : 'Paste CSV'}</span>
                       </button>
                     </div>
+                  </div>
 
-                    {/* Search, Filter, and Export */}
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      <div className="relative">
-                        <Search className="w-3.5 h-3.5 text-[#68738A] absolute left-3 top-3" />
-                        <input
-                          type="text"
-                          placeholder={outputView === 'clean' ? 'Search clean records...' : 'Search anomalies...'}
-                          value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
-                          className="h-9 bg-white border border-[#DCE4F2] rounded-lg pl-8 pr-3 text-xs text-[#201D64] placeholder-[#68738A] focus:outline-none focus:border-[#5D94D9] w-52"
-                        />
-                      </div>
-
-                      {outputView === 'exceptions' && (
-                        <div className="flex items-center gap-1.5">
-                          <Filter className="w-3.5 h-3.5 text-[#68738A]" />
-                          <select
-                            value={exceptionTypeFilter}
-                            onChange={(e) => setExceptionTypeFilter(e.target.value)}
-                            className="h-9 bg-white border border-[#DCE4F2] text-[#201D64] text-xs rounded-lg px-2.5 focus:outline-none focus:border-[#5D94D9] font-mono font-semibold"
+                  {/* Benchmark Domain Presets */}
+                  <div className="space-y-2">
+                    <span className="text-xs font-bold text-[#172554] block">
+                      Domain Benchmark Datasets:
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                      {samplePresets.map((preset) => {
+                        const isSelected = inputMode === 'sample' && selectedSampleId === preset.id;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => loadSamplePreset(preset.id)}
+                            className={`p-3.5 rounded-xl border text-left transition-colors flex flex-col justify-between ${
+                              isSelected
+                                ? 'bg-[#F5F7FC] border-[#3659B8]'
+                                : 'bg-white hover:bg-[#F5F7FC] border-[#E2E8F0]'
+                            }`}
                           >
-                            <option value="ALL">All Violation Codes ({exceptions.length})</option>
-                            <option value="INVALID_EMAIL_FORMAT">Invalid Email Format</option>
-                            <option value="INVALID_PHONE_NUMBER">Invalid Phone Number</option>
-                            <option value="NEGATIVE_VALUE_ERROR">Negative Prices / Values</option>
-                            <option value="NEGATIVE_STOCK">Negative Inventory / Stock</option>
-                            <option value="DUPLICATE_IDENTIFIER">Duplicate Primary Key</option>
-                            <option value="MISSING_PRIMARY_KEY">Missing Primary Key</option>
-                            <option value="MATHEMATICAL_DISCREPANCY">Math Calculation Mismatch</option>
-                          </select>
-                        </div>
-                      )}
-
-                      {/* Download CSV Action */}
-                      {outputView === 'clean' ? (
-                        <button
-                          onClick={() => downloadCSV(cleanRecords, 'cleaned_dataset.csv')}
-                          className="h-9 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
-                        >
-                          <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                          <span>Download Clean CSV</span>
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => downloadCSV(exceptions, 'exception_register.csv')}
-                          className="h-9 px-3.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
-                        >
-                          <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                          <span>Download Exceptions CSV</span>
-                        </button>
-                      )}
+                            <div className="flex items-center justify-between gap-2 w-full mb-1">
+                              <span className="text-xs font-bold text-[#172554] truncate">
+                                {preset.name}
+                              </span>
+                              {getDomainIcon(preset.id.toUpperCase())}
+                            </div>
+                            <span className="text-[11px] text-[#64748B] truncate block">
+                              {preset.domain}
+                            </span>
+                            <div className="mt-2 text-[11px] font-mono font-semibold text-[#3659B8] tabular-nums">
+                              {preset.recordCount} records
+                            </div>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
-                  {/* TABLE 1: CLEAN WAREHOUSE DATASET */}
-                  {outputView === 'clean' && (
-                    <div className="overflow-x-auto max-h-[500px] overflow-y-auto text-xs">
-                      <table className="w-full text-left border-collapse">
-                        <thead className="bg-[#EAF2FC] text-[#201D64] sticky top-0 font-bold border-b border-[#DCE4F2] font-mono text-[11px]">
-                          <tr>
-                            {profile?.headers.map((h, idx) => (
-                              <th key={idx} className="py-3 px-4 whitespace-nowrap">{h}</th>
-                            ))}
-                            <th className="py-3 px-4 text-center w-20">Inspect</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[#DCE4F2] font-mono text-[11px] bg-white">
-                          {filteredClean.map((r, idx) => (
-                            <tr key={idx} className="hover:bg-[#F5F7FC] text-[#201D64] transition-colors">
-                              {profile?.headers.map((h, colIdx) => (
-                                <td key={colIdx} className="py-2.5 px-4 whitespace-nowrap">
-                                  {r[h] || <span className="text-[#68738A]">—</span>}
-                                </td>
-                              ))}
-                              <td className="py-2.5 px-4 text-center">
-                                <button
-                                  onClick={() => setSelectedRecordForDetail(r)}
-                                  className="text-[#68738A] hover:text-[#201D64] p-1 rounded transition-colors"
-                                  title="Inspect record JSON"
-                                >
-                                  <Eye className="w-3.5 h-3.5" />
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      {filteredClean.length === 0 && (
-                        <div className="p-8 text-center text-[#68738A] text-xs">
-                          No clean records match your current search query.
-                        </div>
-                      )}
+                  {/* Strict File Picker Input */}
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileInputChange}
+                    accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    className="hidden"
+                  />
+
+                  {inputMode !== 'paste' ? (
+                    <div
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setIsDragOver(true);
+                      }}
+                      onDragLeave={() => setIsDragOver(false)}
+                      onDrop={handleDrop}
+                      onClick={() => fileInputRef.current?.click()}
+                      className={`p-6 border-2 border-dashed rounded-xl text-center cursor-pointer transition-colors ${
+                        isDragOver
+                          ? 'border-[#3659B8] bg-[#F5F7FC]'
+                          : 'border-[#E2E8F0] hover:border-[#3659B8] bg-[#F5F7FC]/60'
+                      }`}
+                    >
+                      <div className="w-11 h-11 rounded-xl bg-white border border-[#E2E8F0] flex items-center justify-center mx-auto mb-2.5">
+                        <FileSpreadsheet className="w-5 h-5 text-[#3659B8]" />
+                      </div>
+                      <div className="text-sm font-bold text-[#172554]">
+                        {inputMode === 'upload' ? (
+                          <span className="inline-flex items-center gap-2">
+                            <FileCheck className="w-4 h-4 text-[#10B981]" />
+                            Loaded: {fileName} ({activeFormat})
+                          </span>
+                        ) : (
+                          <span>Drag &amp; drop a .csv, .xlsx, or .xls file here, or click to browse</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-[#64748B] mt-1">
+                        Strict magic-byte validation active · Selected:{' '}
+                        <span className="font-mono font-semibold text-[#172554]">{fileName}</span>
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <textarea
+                        value={csvContent}
+                        onChange={(e) => handlePasteContentChange(e.target.value)}
+                        rows={6}
+                        placeholder="reg_no,student_name,email,department,year,phone_number&#10;00101,  arun kumar  ,arun@university.edu,Computer Science,3,+91-9876543210"
+                        className="w-full bg-[#F5F7FC] border border-[#E2E8F0] rounded-xl p-3 font-mono text-xs text-[#172554] focus:outline-none focus:border-[#3659B8]"
+                        spellCheck={false}
+                      />
                     </div>
                   )}
+                </section>
 
-                  {/* TABLE 2: EXCEPTION REGISTER */}
-                  {outputView === 'exceptions' && (
-                    <div className="overflow-x-auto max-h-[500px] overflow-y-auto text-xs">
-                      <table className="w-full text-left border-collapse">
-                        <thead className="bg-[#FFF1F2] text-rose-900 sticky top-0 font-bold border-b border-rose-200">
+                {/* Step 2: Intelligent Profiling */}
+                {profile && (
+                  <section className="bg-white border border-[#E2E8F0] rounded-xl p-6 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#E2E8F0]">
+                      <div>
+                        <h2 className="text-base font-bold text-[#172554]">
+                          2. Intelligent Profiling &amp; Domain Detection
+                        </h2>
+                        <p className="text-xs text-[#64748B]">
+                          {profile.domain_title} · {profile.domain_confidence_pct}% Match ·{' '}
+                          {isProfiling ? 'Analyzing...' : 'Schema Ready'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActivePage('profiling')}
+                        className="px-3.5 py-1.5 bg-[#F5F7FC] hover:bg-[#E2E8F0]/60 border border-[#E2E8F0] rounded-lg text-xs font-bold text-[#3659B8]"
+                      >
+                        Open Deep Statistical Charts →
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs tabular-nums">
+                      <div className="p-3.5 bg-[#F5F7FC] border border-[#E2E8F0] rounded-xl">
+                        <div className="text-[#64748B] font-semibold">Dimensions</div>
+                        <div className="font-mono text-lg font-bold text-[#172554] mt-1">
+                          {profile.total_rows} × {profile.total_columns}
+                        </div>
+                      </div>
+                      <div className="p-3.5 bg-[#F5F7FC] border border-[#E2E8F0] rounded-xl">
+                        <div className="text-[#64748B] font-semibold">Primary Identifier</div>
+                        <div className="font-mono text-base font-bold text-[#172554] mt-1 truncate">
+                          {profile.primary_identifier || 'None Detected'}
+                        </div>
+                      </div>
+                      <div className="p-3.5 bg-[#F5F7FC] border border-[#E2E8F0] rounded-xl">
+                        <div className="text-[#64748B] font-semibold">Missing Cells</div>
+                        <div className="font-mono text-lg font-bold text-[#F59E0B] mt-1">
+                          {profile.total_missing_cells} ({profile.missing_cells_percentage}%)
+                        </div>
+                      </div>
+                      <div className="p-3.5 bg-[#F5F7FC] border border-[#E2E8F0] rounded-xl">
+                        <div className="text-[#64748B] font-semibold">Initial Quality Score</div>
+                        <div className="font-mono text-lg font-bold text-[#3659B8] mt-1">
+                          {profile.data_quality_score}%
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto border border-[#E2E8F0] rounded-xl">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead className="bg-[#F5F7FC] text-[#172554] font-mono text-[11px] border-b border-[#E2E8F0]">
                           <tr>
-                            <th className="py-3 px-4 w-20">Row #</th>
-                            <th className="py-3 px-4 w-36">Record ID</th>
-                            <th className="py-3 px-4 w-36">Offending Field</th>
-                            <th className="py-3 px-4 w-44">Violation Code</th>
-                            <th className="py-3 px-4 w-24">Severity</th>
-                            <th className="py-3 px-4 w-40">Offending Value</th>
-                            <th className="py-3 px-4">Root Cause Diagnosis &amp; Suggestion</th>
+                            <th className="py-2.5 px-3 font-bold">Column</th>
+                            <th className="py-2.5 px-3 font-bold">Physical Type</th>
+                            <th className="py-2.5 px-3 font-bold">Semantic Role</th>
+                            <th className="py-2.5 px-3 font-bold">Key Status</th>
+                            <th className="py-2.5 px-3 font-bold text-right">Missing</th>
+                            <th className="py-2.5 px-3 font-bold text-right">Unique %</th>
+                            <th className="py-2.5 px-3 font-bold">Sample Value</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-[#DCE4F2] font-mono text-[11px] bg-white">
-                          {filteredExceptions.map((ex, idx) => (
-                            <tr key={idx} className="hover:bg-rose-50/50 text-[#201D64] transition-colors">
-                              <td className="py-2.5 px-4 text-[#68738A] tabular-nums">#{ex.row_number}</td>
-                              <td className="py-2.5 px-4 font-bold text-[#201D64]">{ex.record_id}</td>
-                              <td className="py-2.5 px-4 text-rose-600 font-bold">{ex.field_name}</td>
-                              <td className="py-2.5 px-4">
-                                <span className="bg-[#F5F7FC] px-2 py-0.5 rounded border border-[#DCE4F2] text-[10px] font-semibold text-[#201D64]">
-                                  {ex.violation_type}
-                                </span>
-                              </td>
-                              <td className="py-2.5 px-4">
-                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
-                                  ex.severity === 'CRITICAL'
-                                    ? 'bg-rose-100 text-rose-700 border border-rose-200'
-                                    : 'bg-amber-100 text-amber-700 border border-amber-200'
-                                }`}>
-                                  {ex.severity}
-                                </span>
-                              </td>
-                              <td className="py-2.5 px-4">
-                                <span className="font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200 max-w-[150px] truncate inline-block">
-                                  {ex.raw_value || 'EMPTY_NULL'}
-                                </span>
-                              </td>
-                              <td className="py-2.5 px-4 font-sans text-xs">
-                                <div className="text-[#201D64] font-medium">{ex.error_message}</div>
-                                {ex.suggested_correction && (
-                                  <div className="text-emerald-700 text-[11px] font-mono font-semibold mt-0.5">
-                                    Suggested Fix: {ex.suggested_correction}
-                                  </div>
+                        <tbody className="divide-y divide-[#E2E8F0] font-mono text-[11px] tabular-nums">
+                          {profile.columns.map((c) => (
+                            <tr key={c.column_name} className="hover:bg-[#F5F7FC]">
+                              <td className="py-2 px-3 font-bold text-[#172554]">{c.column_name}</td>
+                              <td className="py-2 px-3 text-[#64748B]">{c.physical_type}</td>
+                              <td className="py-2 px-3 text-[#3659B8] font-bold">{c.semantic_type}</td>
+                              <td className="py-2 px-3">
+                                {c.is_potential_identifier ? (
+                                  <span className="text-[#10B981] font-bold">Primary ID</span>
+                                ) : (
+                                  <span className="text-[#64748B]">—</span>
                                 )}
                               </td>
+                              <td className="py-2 px-3 text-right">
+                                {c.missing_count > 0 ? (
+                                  <span className="text-[#F59E0B] font-bold">
+                                    {c.missing_count} ({c.missing_percentage}%)
+                                  </span>
+                                ) : (
+                                  <span className="text-[#10B981]">0%</span>
+                                )}
+                              </td>
+                              <td className="py-2 px-3 text-right">{c.unique_percentage}%</td>
+                              <td className="py-2 px-3 text-[#64748B] max-w-[150px] truncate">
+                                {c.sample_values[0] || 'NULL'}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
-                      {filteredExceptions.length === 0 && (
-                        <div className="p-8 text-center text-[#68738A] text-xs">
-                          No quarantined exceptions match your current filter.
+                    </div>
+                  </section>
+                )}
+
+                {/* Step 3: Dynamic Recommendations */}
+                {recommendations.length > 0 && (
+                  <section className="bg-white border border-[#E2E8F0] rounded-xl p-6 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#E2E8F0]">
+                      <div>
+                        <h2 className="text-base font-bold text-[#172554]">
+                          3. Dynamic Cleaning &amp; Validation Rules
+                        </h2>
+                        <p className="text-xs text-[#64748B]">
+                          Toggle rules prior to running the cleaning &amp; quarantine pipeline
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const allTrue: Record<string, boolean> = {};
+                          recommendations.forEach((r) => (allTrue[r.id] = true));
+                          setEnabledRuleMap(allTrue);
+                        }}
+                        className="px-3 py-1.5 text-xs font-bold rounded-lg bg-[#F5F7FC] hover:bg-[#E2E8F0]/60 text-[#172554] border border-[#E2E8F0]"
+                      >
+                        Enable All
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs">
+                      {recommendations.map((rec) => {
+                        const isEnabled = enabledRuleMap[rec.id] ?? rec.enabled;
+                        return (
+                          <div
+                            key={rec.id}
+                            onClick={() => toggleRecommendation(rec.id)}
+                            className={`p-4 rounded-xl border cursor-pointer transition-colors flex flex-col justify-between space-y-2.5 ${
+                              isEnabled
+                                ? 'bg-[#F5F7FC] border-[#3659B8]'
+                                : 'bg-white border-[#E2E8F0] opacity-60'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center gap-2.5">
+                                {isEnabled ? (
+                                  <CheckSquare className="w-4 h-4 text-[#171653] shrink-0" />
+                                ) : (
+                                  <Square className="w-4 h-4 text-[#64748B] shrink-0" />
+                                )}
+                                <span className="font-bold text-[#172554] text-xs">{rec.name}</span>
+                              </div>
+                              <span
+                                className={`text-[11px] font-mono font-bold ${
+                                  rec.severity === 'CRITICAL' ? 'text-[#EF4444]' : 'text-[#3659B8]'
+                                }`}
+                              >
+                                {rec.category}
+                              </span>
+                            </div>
+
+                            <p className="text-[11px] text-[#64748B] leading-snug">{rec.description}</p>
+
+                            <div className="bg-white p-2.5 rounded-lg border border-[#E2E8F0] font-mono text-[11px] flex items-center justify-between text-[#64748B]">
+                              <span className="text-[#EF4444] truncate">{rec.preview.before}</span>
+                              <ArrowRight className="w-3.5 h-3.5 text-[#3659B8] shrink-0 mx-2" />
+                              <span className="text-[#10B981] font-bold truncate">{rec.preview.after}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="pt-4 border-t border-[#E2E8F0] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <button
+                        type="button"
+                        onClick={() => setShowLogs(!showLogs)}
+                        className="h-9 inline-flex items-center gap-1.5 px-3.5 rounded-lg bg-[#F5F7FC] hover:bg-[#E2E8F0]/60 border border-[#E2E8F0] text-xs text-[#172554] font-mono font-semibold"
+                      >
+                        <Terminal className="w-3.5 h-3.5 text-[#3659B8]" />
+                        <span>{showLogs ? 'Hide Engine Terminal' : 'Show Engine Terminal'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleExecutePipeline}
+                        disabled={isValidating}
+                        className="h-10 px-6 bg-[#171653] hover:bg-[#211D6B] text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 disabled:opacity-50"
+                      >
+                        {isValidating ? (
+                          <RotateCw className="w-4 h-4 animate-spin text-[#28B8D5]" />
+                        ) : (
+                          <Play className="w-4 h-4 fill-current text-[#28B8D5]" />
+                        )}
+                        <span>{isValidating ? 'Executing Pipeline...' : 'Run Dynamic Cleaning & Validation'}</span>
+                      </button>
+                    </div>
+
+                    {showLogs && (
+                      <div className="p-4 bg-[#171653] text-[#10B981] rounded-xl font-mono text-xs whitespace-pre-wrap leading-relaxed max-h-56 overflow-y-auto">
+                        {engineLogs || 'Ready to execute dynamic cleaning rules...'}
+                      </div>
+                    )}
+                  </section>
+                )}
+
+                {/* Step 4: Results Scorecard, Before/After Trigger & Clean / Exception Tables */}
+                {summary && (
+                  <section className="space-y-4">
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 tabular-nums">
+                      <div className="p-5 bg-white border border-[#E2E8F0] rounded-xl">
+                        <span className="text-xs font-semibold text-[#64748B]">Total Ingested Records</span>
+                        <div className="font-mono text-2xl font-bold text-[#172554] mt-2">
+                          {summary.total_records}
+                        </div>
+                        <div className="text-[11px] text-[#3659B8] font-mono mt-1 truncate">
+                          {summary.domain_detected}
+                        </div>
+                      </div>
+
+                      <div className="p-5 bg-white border border-[#E2E8F0] rounded-xl">
+                        <span className="text-xs font-semibold text-[#64748B]">Clean Warehouse Ready</span>
+                        <div className="font-mono text-2xl font-bold text-[#10B981] mt-2">
+                          {summary.valid_records}{' '}
+                          <span className="text-xs font-semibold">({summary.pass_rate_pct}%)</span>
+                        </div>
+                        <div className="text-[11px] text-[#64748B] font-mono mt-1">
+                          {summary.auto_cleaned_records ?? 0} auto-cleaned in-place
+                        </div>
+                      </div>
+
+                      <div className="p-5 bg-white border border-[#E2E8F0] rounded-xl">
+                        <span className="text-xs font-semibold text-[#64748B]">Quarantined Anomalies</span>
+                        <div className="font-mono text-2xl font-bold text-[#EF4444] mt-2">
+                          {summary.quarantined_records}{' '}
+                          <span className="text-xs font-semibold">({summary.quarantine_rate_pct}%)</span>
+                        </div>
+                        <div className="text-[11px] text-[#64748B] font-mono mt-1">
+                          Isolated in Exception Register
+                        </div>
+                      </div>
+
+                      <div className="p-5 bg-white border border-[#E2E8F0] rounded-xl flex flex-col justify-between">
+                        <div>
+                          <span className="text-xs font-semibold text-[#64748B]">Before &amp; After Quality Report</span>
+                          <div className="font-mono text-lg font-bold text-[#172554] mt-1">
+                            {comparisonSnapshot ? `${comparisonSnapshot.before.qualityScore}% → ${comparisonSnapshot.after.qualityScore}%` : 'Ready'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setActivePage('comparison')}
+                          className="mt-2 text-xs font-bold text-[#3659B8] hover:underline text-left"
+                        >
+                          Generate Before &amp; After Report →
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Dual Output Table */}
+                    <div className="bg-white border border-[#E2E8F0] rounded-xl overflow-hidden">
+                      <div className="p-4 border-b border-[#E2E8F0] flex flex-col md:flex-row md:items-center justify-between gap-4 bg-[#F5F7FC]">
+                        <div className="flex items-center gap-1 p-1 bg-white border border-[#E2E8F0] rounded-lg text-xs">
+                          <button
+                            type="button"
+                            onClick={() => setOutputView('clean')}
+                            className={`px-3.5 py-1.5 rounded-md font-bold flex items-center gap-2 ${
+                              outputView === 'clean'
+                                ? 'bg-[#171653] text-white'
+                                : 'text-[#64748B] hover:text-[#172554]'
+                            }`}
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5" />
+                            <span>Clean Validated ({cleanRecords.length})</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setOutputView('exceptions')}
+                            className={`px-3.5 py-1.5 rounded-md font-bold flex items-center gap-2 ${
+                              outputView === 'exceptions'
+                                ? 'bg-[#EF4444] text-white'
+                                : 'text-[#64748B] hover:text-[#172554]'
+                            }`}
+                          >
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                            <span>Exception Register ({exceptions.length})</span>
+                          </button>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <div className="relative">
+                            <Search className="w-3.5 h-3.5 text-[#64748B] absolute left-3 top-2.5" />
+                            <input
+                              type="text"
+                              placeholder={outputView === 'clean' ? 'Search clean records...' : 'Search anomalies...'}
+                              value={searchQuery}
+                              onChange={(e) => setSearchQuery(e.target.value)}
+                              className="h-8 bg-white border border-[#E2E8F0] rounded-lg pl-8 pr-3 text-xs text-[#172554] w-48 focus:outline-none focus:border-[#3659B8]"
+                            />
+                          </div>
+
+                          {outputView === 'exceptions' && (
+                            <div className="flex items-center gap-1.5">
+                              <Filter className="w-3.5 h-3.5 text-[#64748B]" />
+                              <select
+                                value={exceptionTypeFilter}
+                                onChange={(e) => setExceptionTypeFilter(e.target.value)}
+                                className="h-8 bg-white border border-[#E2E8F0] text-[#172554] text-xs rounded-lg px-2 font-mono font-semibold"
+                              >
+                                <option value="ALL">All Violation Codes ({exceptions.length})</option>
+                                {Array.from(new Set(exceptions.map((e) => e.violation_type))).map((vt) => (
+                                  <option key={vt} value={vt}>{vt}</option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+
+                          {outputView === 'clean' ? (
+                            <button
+                              type="button"
+                              onClick={() => downloadCSV(cleanRecords, 'cleaned_dataset.csv', 'CSV_CLEAN')}
+                              className="h-8 px-3 bg-[#10B981] hover:bg-[#059669] text-white font-bold text-xs rounded-lg flex items-center gap-1.5"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>Download Clean CSV</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => downloadCSV(exceptions, 'exception_register.csv', 'CSV_EXCEPTIONS')}
+                              className="h-8 px-3 bg-[#EF4444] hover:bg-[#DC2626] text-white font-bold text-xs rounded-lg flex items-center gap-1.5"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>Download Exceptions CSV</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {outputView === 'clean' ? (
+                        <div className="overflow-x-auto max-h-[460px] overflow-y-auto text-xs">
+                          <table className="w-full text-left border-collapse">
+                            <thead className="bg-[#F5F7FC] text-[#172554] sticky top-0 font-bold border-b border-[#E2E8F0] font-mono text-[11px]">
+                              <tr>
+                                {profile?.headers.map((h) => (
+                                  <th key={h} className="py-2.5 px-4 whitespace-nowrap">{h}</th>
+                                ))}
+                                <th className="py-2.5 px-4 text-center w-20">Inspect</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[#E2E8F0] font-mono text-[11px] tabular-nums">
+                              {filteredClean.map((r, idx) => (
+                                <tr key={idx} className="hover:bg-[#F5F7FC] text-[#172554]">
+                                  {profile?.headers.map((h) => (
+                                    <td key={h} className="py-2 px-4 whitespace-nowrap">
+                                      {r[h] || <span className="text-[#64748B]">—</span>}
+                                    </td>
+                                  ))}
+                                  <td className="py-2 px-4 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedRecordForDetail(r)}
+                                      className="text-[#64748B] hover:text-[#172554] p-1"
+                                      title="Inspect record JSON"
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto max-h-[460px] overflow-y-auto text-xs">
+                          <table className="w-full text-left border-collapse">
+                            <thead className="bg-[#FEF2F2] text-[#991B1B] sticky top-0 font-bold border-b border-[#FECACA]">
+                              <tr>
+                                <th className="py-2.5 px-4">Row #</th>
+                                <th className="py-2.5 px-4">Record ID</th>
+                                <th className="py-2.5 px-4">Offending Field</th>
+                                <th className="py-2.5 px-4">Violation Code</th>
+                                <th className="py-2.5 px-4">Severity</th>
+                                <th className="py-2.5 px-4">Offending Value</th>
+                                <th className="py-2.5 px-4">Root Cause Diagnosis &amp; Suggestion</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[#E2E8F0] font-mono text-[11px] tabular-nums">
+                              {filteredExceptions.map((ex, idx) => (
+                                <tr key={idx} className="hover:bg-[#FEF2F2]/40">
+                                  <td className="py-2 px-4 text-[#64748B]">#{ex.row_number}</td>
+                                  <td className="py-2 px-4 font-bold text-[#172554]">{ex.record_id}</td>
+                                  <td className="py-2 px-4 text-[#EF4444] font-bold">{ex.field_name}</td>
+                                  <td className="py-2 px-4 font-semibold text-[#172554]">{ex.violation_type}</td>
+                                  <td className="py-2 px-4 font-bold text-[#EF4444]">{ex.severity}</td>
+                                  <td className="py-2 px-4 text-[#EF4444] max-w-[150px] truncate">
+                                    {ex.raw_value || 'EMPTY_NULL'}
+                                  </td>
+                                  <td className="py-2 px-4 font-sans text-xs">
+                                    <div className="text-[#172554] font-medium">{ex.error_message}</div>
+                                    {ex.suggested_correction && (
+                                      <div className="text-[#10B981] text-[11px] font-mono mt-0.5">
+                                        Fix: {ex.suggested_correction}
+                                      </div>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
                       )}
                     </div>
-                  )}
-                </div>
-              </section>
+                  </section>
+                )}
+              </div>
+            )}
+
+            {activePage === 'taxonomy' && <SchemaTaxonomyView profile={profile} />}
+
+            {activePage === 'profiling' && (
+              <DataProfilingView
+                fileName={fileName}
+                profile={profile}
+                originalRecords={originalRecords}
+                summary={summary}
+                onNavigateStudio={() => setActivePage('studio')}
+              />
+            )}
+
+            {activePage === 'cleaning' && (
+              <DataCleaningView
+                fileName={fileName}
+                recommendations={recommendations}
+                enabledRuleMap={enabledRuleMap}
+                onToggleRule={toggleRecommendation}
+                onEnableAll={() => {
+                  const allTrue: Record<string, boolean> = {};
+                  recommendations.forEach((r) => (allTrue[r.id] = true));
+                  setEnabledRuleMap(allTrue);
+                }}
+                onExecutePipeline={handleExecutePipeline}
+                isValidating={isValidating}
+                engineLogs={engineLogs}
+              />
+            )}
+
+            {activePage === 'validation' && (
+              <DataValidationView
+                fileName={fileName}
+                profile={profile}
+                summary={summary}
+                comparison={comparisonSnapshot}
+                cleanRecords={cleanRecords}
+                exceptions={exceptions}
+                onExecutePipeline={handleExecutePipeline}
+                isValidating={isValidating}
+                onInspectRecord={setSelectedRecordForDetail}
+                onDownloadClean={() => downloadCSV(cleanRecords, 'cleaned_dataset.csv', 'CSV_CLEAN')}
+              />
+            )}
+
+            {activePage === 'exceptions' && (
+              <ExceptionManagementView
+                fileName={fileName}
+                exceptions={exceptions}
+                onDownloadExceptions={() =>
+                  downloadCSV(exceptions, 'exception_register.csv', 'CSV_EXCEPTIONS')
+                }
+                onExecutePipeline={handleExecutePipeline}
+                hasProcessedRun={summary !== null}
+              />
+            )}
+
+            {activePage === 'monitoring' && (
+              <QualityMonitoringView
+                datasetName={fileName}
+                dimensions={sixDimensions}
+                weights={settings.scoringWeights}
+                onUpdateWeights={(nextWeights) =>
+                  setSettings((prev) => ({ ...prev, scoringWeights: nextWeights }))
+                }
+                runs={runs}
+                onNavigateStudio={() => setActivePage('studio')}
+              />
+            )}
+
+            {activePage === 'comparison' && (
+              <DatasetComparisonView
+                datasetName={fileName}
+                comparison={comparisonSnapshot}
+                hasProcessedRun={summary !== null}
+                runs={runs}
+                onGenerateComparison={handleGenerateQualityComparison}
+                onDownloadPDF={handleDownloadPDFReport}
+                onDownloadExcel={handleDownloadExcelReport}
+                onNavigateStudio={() => setActivePage('studio')}
+              />
+            )}
+
+            {activePage === 'quality-reports' && (
+              <ReportsView
+                datasetName={fileName}
+                comparison={comparisonSnapshot}
+                runs={runs}
+                reports={reports}
+                onDownloadPDF={handleDownloadPDFReport}
+                onDownloadExcel={handleDownloadExcelReport}
+                onExportCleanCSV={() => downloadCSV(cleanRecords, 'cleaned_dataset.csv', 'CSV_CLEAN')}
+                onExportExceptionsCSV={() =>
+                  downloadCSV(exceptions, 'exception_register.csv', 'CSV_EXCEPTIONS')
+                }
+                hasCleanData={cleanRecords.length > 0}
+                hasExceptions={exceptions.length > 0}
+              />
+            )}
+
+            {activePage === 'audit-logs' && <AuditLogsView audits={audits} />}
+
+            {activePage === 'settings' && (
+              <SettingsView
+                settings={settings}
+                onUpdateSettings={setSettings}
+                onClearHistory={handleClearHistory}
+                engineHealthy={engineHealthy}
+              />
             )}
           </main>
 
-          {/* OFFICIAL WEBSITE FOOTER (BRANDED DEEP NAVY #17154F) */}
-          <footer className="mt-auto border-t border-[#DCE4F2] bg-white px-6 py-6 text-xs text-[#68738A]">
-            <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
+          {/* Quiet Enterprise Footer */}
+          <footer className="mt-auto border-t border-[#E2E8F0] bg-white px-6 py-4 text-xs text-[#64748B]">
+            <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
                 <img
                   src="/assets/aistudio/logofi_0606f38f.png"
-                  alt="DIT Project Logo"
-                  className="h-8 w-8 object-contain rounded-lg bg-[#17154F] p-0.5"
+                  alt="iData Engine"
+                  referrerPolicy="no-referrer"
+                  className="h-6 w-6 object-contain rounded bg-[#171653] p-0.5"
                 />
-                <div>
-                  <div className="font-bold text-[#201D64]">
-                    DIT Internship 2026 · TASK 07 Data Cleaning &amp; Validation Engine
-                  </div>
-                  <div className="text-[11px] text-[#68738A]">
-                    Automated Multi-Domain Quality Assurance &amp; Anomaly Quarantine
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-4 font-mono text-[11px]">
-                <span className="text-emerald-700 flex items-center gap-1.5 font-bold">
-                  <Check className="w-3.5 h-3.5 stroke-[3]" /> 10/10 Mandatory Tests Passing
+                <span className="font-semibold text-[#172554]">
+                  iData Engine v2.5 · Enterprise Data Cleaning &amp; Validation Platform
                 </span>
-                <span className="text-[#DCE4F2]">|</span>
-                <button
-                  onClick={() => setShowDeliverablesModal(true)}
-                  className="hover:text-[#201D64] font-semibold transition-colors"
-                >
-                  Deliverables Checklist
-                </button>
-                <span className="text-[#DCE4F2]">|</span>
-                <button
-                  onClick={() => setShowDataDictionaryModal(true)}
-                  className="hover:text-[#201D64] font-semibold transition-colors"
-                >
-                  Taxonomy Dictionary
-                </button>
+              </div>
+              <div className="flex items-center gap-2 font-semibold text-[#10B981]">
+                <span className="w-2 h-2 rounded-full bg-[#10B981]" />
+                <span>Validation Engine Operational</span>
               </div>
             </div>
           </footer>
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* RECORD DETAIL INSPECTOR MODAL                                             */}
-      {/* ========================================================================= */}
+      {/* Strict Unsupported File Modal */}
+      <UnsupportedFileModal
+        isOpen={unsupportedModal.isOpen}
+        fileName={unsupportedModal.fileName}
+        diagnosticReason={unsupportedModal.reason}
+        onClose={() => setUnsupportedModal({ isOpen: false })}
+      />
+
+      {/* Record JSON Detail Inspector */}
       {selectedRecordForDetail && (
-        <div className="fixed inset-0 z-50 bg-[#17154F]/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white border border-[#DCE4F2] rounded-2xl w-full max-w-lg p-5 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-[#DCE4F2]">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                <h3 className="font-bold text-[#201D64] text-sm">
-                  Record Entity Inspector
-                </h3>
-              </div>
+        <div className="fixed inset-0 z-50 bg-[#171653]/70 flex items-center justify-center p-4">
+          <div className="bg-white border border-[#E2E8F0] rounded-2xl w-full max-w-lg p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+              <h3 className="font-bold text-[#172554] text-sm">Record Entity Inspector</h3>
               <button
+                type="button"
                 onClick={() => setSelectedRecordForDetail(null)}
-                className="text-[#68738A] hover:text-[#201D64]"
+                className="text-[#64748B] hover:text-[#172554]"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-
-            <pre className="p-4 bg-[#17154F] border border-[#201D64] rounded-xl font-mono text-xs text-emerald-400 overflow-x-auto max-h-72 leading-relaxed">
+            <pre className="p-4 bg-[#171653] rounded-xl font-mono text-xs text-[#10B981] overflow-x-auto max-h-72 leading-relaxed">
               {JSON.stringify(selectedRecordForDetail, null, 2)}
             </pre>
-
             <div className="flex items-center justify-between">
               <button
+                type="button"
                 onClick={() => {
                   navigator.clipboard.writeText(JSON.stringify(selectedRecordForDetail, null, 2));
                   setCopiedDetail(true);
                   setTimeout(() => setCopiedDetail(false), 2000);
                 }}
-                className="text-xs text-[#201D64] hover:text-[#5D94D9] flex items-center gap-1.5 font-bold"
+                className="text-xs text-[#172554] hover:text-[#3659B8] flex items-center gap-1.5 font-bold"
               >
-                {copiedDetail ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedDetail ? 'Copied to Clipboard' : 'Copy JSON'}</span>
+                {copiedDetail ? <Check className="w-3.5 h-3.5 text-[#10B981]" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedDetail ? 'Copied' : 'Copy JSON'}</span>
               </button>
-
               <button
+                type="button"
                 onClick={() => setSelectedRecordForDetail(null)}
-                className="px-4 py-2 bg-[#201D64] hover:bg-[#17154F] text-white text-xs font-bold rounded-lg"
-              >
-                Close Inspector
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 1: DATA DICTIONARY REFERENCE                                        */}
-      {/* ========================================================================= */}
-      {showDataDictionaryModal && (
-        <div className="fixed inset-0 z-50 bg-[#17154F]/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white border border-[#DCE4F2] rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl">
-            <div className="p-4 border-b border-[#DCE4F2] flex items-center justify-between bg-[#F5F7FC]">
-              <div>
-                <h2 className="text-base font-bold text-[#201D64] flex items-center gap-2">
-                  <BookOpen className="w-4 h-4 text-[#5D94D9]" />
-                  <span>Universal Data Dictionary &amp; Multi-Domain Schema Taxonomy</span>
-                </h2>
-                <p className="text-xs text-[#68738A] mt-0.5">
-                  Dynamic rules supported across Student, Employee HR, Inventory, Order, and Healthcare datasets.
-                </p>
-              </div>
-              <button
-                onClick={() => setShowDataDictionaryModal(false)}
-                className="text-[#68738A] hover:text-[#201D64] p-1 rounded-lg hover:bg-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-4 overflow-y-auto text-xs space-y-4 flex-1">
-              <div className="p-3.5 bg-[#EAF2FC] border border-[#DCE4F2] rounded-xl space-y-1">
-                <span className="font-bold text-[#201D64] block">Universal Data Quality Capabilities:</span>
-                <p className="text-[#201D64] leading-relaxed text-[11px]">
-                  • Preserves leading zeros on Student Register Numbers (`00101`) and Postal Codes.<br/>
-                  • Sanitizes currency symbols (`$`, `€`, `£`, `₹`) and thousand commas on numeric fields.<br/>
-                  • Normalizes mixed dates (`MM/DD/YYYY`, `DD-MM-YYYY`) to canonical ISO `YYYY-MM-DD`.<br/>
-                  • Validates 10-12 digit phone numbers with or without international country codes (`+91`, `+1`).<br/>
-                  • Detects cross-field business calculation fraud (`total = qty * price * (1 - disc) + tax`).
-                </p>
-              </div>
-
-              {profile && (
-                <div>
-                  <span className="font-bold text-[#201D64] block mb-1.5">
-                    Currently Loaded Schema ({profile.domain_title}):
-                  </span>
-                  <div className="overflow-x-auto border border-[#DCE4F2] rounded-xl">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead className="bg-[#EAF2FC] text-[#201D64] font-mono text-[11px] border-b border-[#DCE4F2]">
-                        <tr>
-                          <th className="p-2.5 font-bold">Field</th>
-                          <th className="p-2.5 font-bold">Inferred Type</th>
-                          <th className="p-2.5 font-bold">Semantic Role</th>
-                          <th className="p-2.5 font-bold">Rules Enforced</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[#DCE4F2] font-mono text-[11px] bg-white">
-                        {profile.columns.map((c, i) => (
-                          <tr key={i}>
-                            <td className="p-2.5 font-bold text-[#201D64]">{c.column_name}</td>
-                            <td className="p-2.5 text-[#68738A]">{c.physical_type}</td>
-                            <td className="p-2.5 text-[#5D94D9] font-bold">{c.semantic_type}</td>
-                            <td className="p-2.5 font-sans text-xs text-[#201D64]">
-                              {c.is_potential_identifier ? 'Uniqueness, non-null integrity' : 'Type validation & whitespace normalization'}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="p-4 border-t border-[#DCE4F2] flex justify-end">
-              <button
-                onClick={() => setShowDataDictionaryModal(false)}
-                className="px-4 py-2 bg-[#201D64] hover:bg-[#17154F] text-white text-xs font-bold rounded-lg"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 2: 5 OFFICIAL DELIVERABLES CHECKLIST                                */}
-      {/* ========================================================================= */}
-      {showDeliverablesModal && (
-        <div className="fixed inset-0 z-50 bg-[#17154F]/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white border border-[#DCE4F2] rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl">
-            <div className="p-4 border-b border-[#DCE4F2] flex items-center justify-between bg-[#F5F7FC]">
-              <div>
-                <h2 className="text-base font-bold text-[#201D64] flex items-center gap-2">
-                  <PackageCheck className="w-4 h-4 text-[#5D94D9]" />
-                  <span>5 Official Deliverables Evaluation Checklist</span>
-                </h2>
-                <p className="text-xs text-[#68738A] mt-0.5">
-                  Universal Multi-Domain Intelligent CSV Validation Platform · Task 07
-                </p>
-              </div>
-              <button
-                onClick={() => setShowDeliverablesModal(false)}
-                className="text-[#68738A] hover:text-[#201D64] p-1 rounded-lg hover:bg-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-3 overflow-y-auto text-xs flex-1">
-              <div className="p-3.5 bg-[#F5F7FC] rounded-xl border border-[#DCE4F2] flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold">
-                      Deliverable 1
-                    </span>
-                    <span className="font-bold text-[#201D64]">Universal Validation Engine</span>
-                  </div>
-                  <p className="text-[#68738A] text-[11px] mt-1">
-                    Python 3.10 native package (`python_engine/universal_engine.py`, `profiler.py`, `recommender.py`).
-                  </p>
-                </div>
-                <span className="font-mono text-emerald-700 text-xs font-bold flex items-center gap-1">
-                  <Check className="w-3.5 h-3.5" /> 100% Complete
-                </span>
-              </div>
-
-              <div className="p-3.5 bg-[#F5F7FC] rounded-xl border border-[#DCE4F2] flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold">
-                      Deliverable 2
-                    </span>
-                    <span className="font-bold text-[#201D64]">Cleaned Datasets (Multi-Domain)</span>
-                  </div>
-                  <p className="text-[#68738A] text-[11px] mt-1">
-                    Sanitized warehouse-ready records across Student, Product, Employee, and Order domains.
-                  </p>
-                </div>
-                <button
-                  onClick={() => downloadCSV(cleanRecords, 'cleaned_dataset.csv')}
-                  className="px-3.5 py-1.5 bg-[#201D64] hover:bg-[#17154F] text-white font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-sm"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download Clean CSV</span>
-                </button>
-              </div>
-
-              <div className="p-3.5 bg-[#F5F7FC] rounded-xl border border-[#DCE4F2] flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-300 font-bold">
-                      Deliverable 3
-                    </span>
-                    <span className="font-bold text-[#201D64]">Universal Exception Register</span>
-                  </div>
-                  <p className="text-[#68738A] text-[11px] mt-1">
-                    Quarantine audit log with diagnosis, offending values, and suggested fixes (`exception_register.csv`).
-                  </p>
-                </div>
-                <button
-                  onClick={() => downloadCSV(exceptions, 'exception_register.csv')}
-                  className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-sm"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download Exceptions</span>
-                </button>
-              </div>
-
-              <div className="p-3.5 bg-[#F5F7FC] rounded-xl border border-[#DCE4F2] flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold">
-                      Deliverable 4
-                    </span>
-                    <span className="font-bold text-[#201D64]">Dynamic Data Dictionary</span>
-                  </div>
-                  <p className="text-[#68738A] text-[11px] mt-1">
-                    Automated schema profiling and physical/logical taxonomy generation.
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    setShowDeliverablesModal(false);
-                    setShowDataDictionaryModal(true);
-                  }}
-                  className="px-3 py-1.5 bg-[#EAF2FC] hover:bg-[#d8e7fa] text-[#201D64] font-bold rounded-lg text-xs border border-[#DCE4F2]"
-                >
-                  View Taxonomy
-                </button>
-              </div>
-
-              <div className="p-3.5 bg-[#F5F7FC] rounded-xl border border-[#DCE4F2] flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold">
-                      Deliverable 5
-                    </span>
-                    <span className="font-bold text-[#201D64]">10 Mandatory Tests (TC-01 to TC-10)</span>
-                  </div>
-                  <p className="text-[#68738A] text-[11px] mt-1">
-                    Official evaluation suite: schema, missing, types, duplicates, dates, empty, unreadable, boundary, outputs.
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    setShowDeliverablesModal(false);
-                    setShowTestSuiteModal(true);
-                    if (!testOutput) handleRunTests();
-                  }}
-                  className="px-3.5 py-1.5 bg-[#201D64] hover:bg-[#17154F] text-white font-bold rounded-lg text-xs flex items-center gap-1.5"
-                >
-                  <Play className="w-3 h-3 fill-current text-[#5D94D9]" />
-                  <span>Run 10 Tests</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="p-4 border-t border-[#DCE4F2] flex justify-end">
-              <button
-                onClick={() => setShowDeliverablesModal(false)}
-                className="px-4 py-2 bg-[#201D64] hover:bg-[#17154F] text-white text-xs font-bold rounded-lg"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* MODAL 3: 10 MANDATORY TEST RUNNER (DELIVERABLE 5)                         */}
-      {/* ========================================================================= */}
-      {showTestSuiteModal && (
-        <div className="fixed inset-0 z-50 bg-[#17154F]/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white border border-[#DCE4F2] rounded-3xl w-full max-w-3xl max-h-[88vh] flex flex-col shadow-2xl">
-            <div className="p-5 border-b border-[#DCE4F2] flex items-center justify-between bg-[#F5F7FC] rounded-t-3xl">
-              <div>
-                <h2 className="text-base font-extrabold text-[#201D64] flex items-center gap-2">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                  <span>10 Mandatory Evaluation Test Cases (TC-01 to TC-10)</span>
-                </h2>
-                <p className="text-xs text-[#68738A] mt-0.5">
-                  Directly mapping to academic report rubric '13. Test Cases and Results'.
-                </p>
-              </div>
-              <button
-                onClick={() => setShowTestSuiteModal(false)}
-                className="text-[#68738A] hover:text-[#201D64] p-1 rounded-lg hover:bg-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4 flex-1 overflow-y-auto">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-[#68738A]">
-                  Executes native Python standard library test runner (`python_engine/universal_engine.py` &amp; `tests/test_mandatory_suite.py`).
-                </span>
-                <button
-                  onClick={handleRunTests}
-                  disabled={isRunningTests}
-                  className="px-4 py-2 bg-[#201D64] hover:bg-[#17154F] text-white font-bold text-xs rounded-xl flex items-center gap-2 shadow-sm"
-                >
-                  {isRunningTests ? <RotateCw className="w-3.5 h-3.5 animate-spin text-[#5D94D9]" /> : <Play className="w-3.5 h-3.5 fill-current text-[#5D94D9]" />}
-                  <span>{isRunningTests ? 'Executing...' : 'Execute 10 Tests'}</span>
-                </button>
-              </div>
-
-              {/* 10 Test Cases Table */}
-              <div className="overflow-x-auto border border-[#DCE4F2] rounded-2xl">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead className="bg-[#EAF2FC] text-[#201D64] font-bold text-[11px] border-b border-[#DCE4F2]">
-                    <tr>
-                      <th className="py-2.5 px-3 w-16">Test ID</th>
-                      <th className="py-2.5 px-3 w-48">Scenario</th>
-                      <th className="py-2.5 px-3">Expected Result</th>
-                      <th className="py-2.5 px-3 text-center w-24">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#DCE4F2] text-[11px] bg-white">
-                    {MANDATORY_TEN_TESTS.map(tc => {
-                      const isOk = testResultsMap[tc.method] === 'ok';
-                      return (
-                        <tr key={tc.id} className="hover:bg-[#F5F7FC]">
-                          <td className="py-2 px-3 font-mono font-bold text-[#201D64]">{tc.id}</td>
-                          <td className="py-2 px-3 font-semibold text-[#201D64]">{tc.scenario}</td>
-                          <td className="py-2 px-3 text-[#68738A]">{tc.expected}</td>
-                          <td className="py-2 px-3 text-center">
-                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-mono text-[10px] font-bold ${
-                              isOk ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-rose-100 text-rose-800'
-                            }`}>
-                              <Check className="w-3 h-3 stroke-[3]" /> Passed
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Live Terminal Output */}
-              <div className="p-3 bg-[#17154F] border border-[#201D64] rounded-xl font-mono text-xs text-emerald-400 whitespace-pre-wrap max-h-44 overflow-y-auto leading-relaxed shadow-inner">
-                {testOutput || 'Ran 10 tests in 0.011s\n\nOK'}
-              </div>
-            </div>
-
-            <div className="p-4 border-t border-[#DCE4F2] flex justify-end">
-              <button
-                onClick={() => setShowTestSuiteModal(false)}
-                className="px-4 py-2 bg-[#201D64] hover:bg-[#17154F] text-white text-xs font-bold rounded-lg"
+                className="px-4 py-2 bg-[#171653] hover:bg-[#211D6B] text-white text-xs font-bold rounded-lg"
               >
                 Close
               </button>
